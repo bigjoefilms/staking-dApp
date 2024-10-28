@@ -7,6 +7,8 @@ pub struct State {
     total_staked: Amount,
     daily_reward_rate: u64, // Basis points (1/10000)
     owner: AccountAddress,
+    total_rewards_distributed: Amount,
+    monthly_tvl_history: Vec<(Timestamp, Amount)>, // Stores (timestamp, TVL) pairs
 }
 
 // Stake structure
@@ -56,6 +58,8 @@ fn contract_init(
         total_staked: Amount::from_micro_ccd(0),
         daily_reward_rate: 10, // 0.1% daily reward as default
         owner,
+        total_rewards_distributed: Amount::from_micro_ccd(0),
+        monthly_tvl_history: Vec::new(),
     })
 }
 
@@ -86,6 +90,15 @@ fn stake(
     host.state_mut().total_staked = host.state().total_staked.add(amount);
 
     host.logger().log(&Event::Staked(sender, amount, TokenType::CCD, duration))?;
+
+    // Update monthly TVL history
+    let current_time = ctx.metadata().slot_time();
+    host.state_mut().monthly_tvl_history.push((current_time, host.state().total_staked));
+    
+    // Keep only last 31 days of history
+    while host.state_mut().monthly_tvl_history.len() > 31 {
+        host.state_mut().monthly_tvl_history.remove(0);
+    }
 
     Ok(())
 }
@@ -143,6 +156,17 @@ fn unstake(ctx: &ReceiveContext, host: &mut Host<State>) -> Result<(), ContractE
     }
 
     let reward = calculate_reward(&stake, staking_period, host.state().daily_reward_rate);
+
+    // Update total rewards distributed
+    host.state_mut().total_rewards_distributed = host.state().total_rewards_distributed.add(reward);
+
+    // Update monthly TVL history
+    host.state_mut().monthly_tvl_history.push((current_time, host.state().total_staked));
+    
+    // Keep only last 31 days of history
+    while host.state_mut().monthly_tvl_history.len() > 31 {
+        host.state_mut().monthly_tvl_history.remove(0);
+    }
 
     // Transfer staked amount + reward back to the user
     let total_amount = stake.amount.add(reward);
@@ -226,4 +250,42 @@ fn calculate_reward(stake: &Stake, staking_period: Duration, daily_reward_rate: 
     let total_reward_rate = base_reward_rate + (base_reward_rate * bonus_rate as u128) / 100;
     let reward = ((stake.amount.micro_ccd() as u128 * total_reward_rate) / 1_000_000) as u64;
     Amount::from_micro_ccd(reward)
+}
+
+// Add this new struct for statistics
+#[derive(Serialize, SchemaType)]
+pub struct StakingStats {
+    total_value_locked: Amount,
+    total_rewards_distributed: Amount,
+    active_stakes: u64,
+    monthly_tvl_change: i64, // Can be negative, represents change in microCCD
+}
+
+// Add this new view function
+#[receive(contract = "staking", name = "view_staking_stats", return_value = "StakingStats")]
+fn view_staking_stats(ctx: &ReceiveContext, host: &Host<State>) -> ReceiveResult<StakingStats> {
+    let state = host.state();
+    let current_time = ctx.metadata().slot_time();
+    
+    // Calculate active stakes
+    let active_stakes = state.stakes.iter().count() as u64;
+    
+    // Calculate monthly TVL change
+    let month_ago = current_time.checked_sub(Duration::from_millis(30 * 24 * 60 * 60 * 1000))
+        .unwrap_or(current_time);
+    
+    let month_ago_tvl = state.monthly_tvl_history.iter()
+        .rev()
+        .find(|(timestamp, _)| timestamp <= &month_ago)
+        .map(|(_, amount)| amount.micro_ccd())
+        .unwrap_or(0);
+    
+    let tvl_change = state.total_staked.micro_ccd() as i64 - month_ago_tvl as i64;
+
+    Ok(StakingStats {
+        total_value_locked: state.total_staked,
+        total_rewards_distributed: state.total_rewards_distributed,
+        active_stakes,
+        monthly_tvl_change: tvl_change,
+    })
 }
