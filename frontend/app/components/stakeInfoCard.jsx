@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 
-// Add this component definition near the top of the file, with other component definitions
 const LoadingPlaceholder = () => (
   <div className="text-center py-8">
     <p className="text-gray-500 text-lg">
