@@ -19,6 +19,7 @@ pub struct Stake {
     start_time: Timestamp,
     duration: Duration,
     accumulated_reward: Amount,
+    last_claim_time: Option<Timestamp>,
 }
 
 // Token types
@@ -34,6 +35,7 @@ pub enum Event {
     Staked(AccountAddress, Amount, TokenType, Duration),
     Unstaked(AccountAddress, Amount, Amount), // (address, principal, reward)
     RewardRateUpdated(u64),
+    RewardClaimed(AccountAddress, Amount),
 }
 
 // Custom errors
@@ -84,6 +86,7 @@ fn stake(
         start_time: ctx.metadata().slot_time(),
         duration,
         accumulated_reward: Amount::zero(),
+        last_claim_time: None,
     };
 
     host.state_mut().stakes.insert(sender, stake);
@@ -133,6 +136,7 @@ fn stake_cid2(
         start_time: ctx.metadata().slot_time(),
         duration,
         accumulated_reward: Amount::zero(),
+        last_claim_time: None,
     };
 
     host.state_mut().stakes.insert(sender, stake);
@@ -288,4 +292,40 @@ fn view_staking_stats(ctx: &ReceiveContext, host: &Host<State>) -> ReceiveResult
         active_stakes,
         monthly_tvl_change: tvl_change,
     })
+}
+
+#[receive(contract = "staking", name = "claim_reward", enable_logger)]
+fn claim_reward(ctx: &ReceiveContext, host: &mut Host<State>) -> Result<(), ContractError> {
+    let sender = ctx.sender();
+    let stake = host.state_mut().stakes.get_mut(&sender).ok_or(ContractError::StakeNotFound)?;
+    
+    let current_time = ctx.metadata().slot_time();
+    let staking_period = current_time.duration_between(&stake.start_time);
+
+    // Calculate new rewards since last claim
+    let new_reward = calculate_reward(&stake, staking_period, host.state().daily_reward_rate);
+    
+    // Transfer reward to user
+    if stake.token_type == TokenType::CCD {
+        host.invoke_transfer(&sender, new_reward)?;
+    } else {
+        let token_address = host.state().stakes.get(&sender).unwrap().token_address;
+        host.invoke_contract(
+            &token_address,
+            &(host.self_address(), sender, new_reward.micro_ccd()),
+            EntrypointName::new("transfer").unwrap(),
+            Amount::zero(),
+        )?;
+    }
+
+    // Update state
+    host.state_mut().total_rewards_distributed = host.state().total_rewards_distributed.add(new_reward);
+    
+    // Reset the stake's start time to current time for next reward calculation
+    stake.start_time = current_time;
+    
+    // Log the event
+    host.logger().log(&Event::RewardClaimed(sender, new_reward))?;
+
+    Ok(())
 }
