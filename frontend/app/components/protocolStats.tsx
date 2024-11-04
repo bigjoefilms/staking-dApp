@@ -1,0 +1,253 @@
+import {
+  CONTRACT_NAME,
+  MAX_CONTRACT_EXECUTION_ENERGY,
+  MICRO_CCD,
+} from "@/config";
+import { useStateProvider } from "@/provider/StateProvider";
+import { useWallet } from "@/provider/WalletProvider";
+import {
+  AccountAddress,
+  CcdAmount,
+  ConcordiumGRPCClient,
+  ContractAddress,
+  ContractName,
+  deserializeReceiveReturnValue,
+  Energy,
+  EntrypointName,
+  ReceiveName,
+  SchemaVersion,
+  serializeUpdateContractParameters,
+} from "@concordium/web-sdk";
+import React, { useEffect, useState } from "react";
+
+const Card = ({ className = "", children }: any) => (
+  <div className={`bg-white shadow-md rounded-lg ${className}`}>{children}</div>
+);
+
+const ProtocolStats = ({
+  // totalValueLocked = 10000,
+  totalRewards = 200,
+  tvlChange = 12.5,
+  lastUpdated = new Date().toLocaleDateString(),
+}) => {
+  const [totalStaked, setTotalStaked] = useState("");
+  const [totalStakers, setTotalStakers] = useState(0);
+  const { contract, account, rpc } = useWallet();
+  const getTotalAmountStaked = async (
+    rpc: ConcordiumGRPCClient,
+    account: string,
+    contract: any
+  ) => {
+    const receiveName = "view_state";
+
+    try {
+      if (contract) {
+        console.log(contract);
+        const contract_schema = await rpc?.getEmbeddedSchema(
+          contract?.sourceModule
+        );
+
+        // const serializedParameter = serializeUpdateContractParameters(
+        //   ContractName.fromString(CONTRACT_NAME),
+        //   EntrypointName.fromString(receiveName),
+        //   [account],
+        //   contract_schema,
+        //   SchemaVersion.V1
+        // );
+
+        // console.log(serializedParameter);
+
+        const result = await rpc?.invokeContract({
+          contract: contract && ContractAddress?.create(contract?.index, 0),
+          method:
+            contract &&
+            ReceiveName?.create(
+              contract?.name,
+              EntrypointName?.fromString(receiveName)
+            ),
+          energy: Energy.create(MAX_CONTRACT_EXECUTION_ENERGY),
+          // invoker: AccountAddress?.fromJSON(account),
+          // parameter: serializedParameter,
+        });
+        console.log(result.returnValue);
+        const buffer = Buffer.from(result.returnValue?.buffer as Uint8Array);
+        const newschema = Buffer?.from(contract_schema).buffer;
+
+        console.log(newschema);
+        const name = ContractName?.fromString(CONTRACT_NAME);
+        const entry_point = EntrypointName?.fromString(receiveName);
+        console.log(contract_schema);
+
+        const values = await deserializeReceiveReturnValue(
+          buffer,
+          contract_schema,
+          name,
+          entry_point,
+          SchemaVersion?.V1
+        );
+
+        console.log(values);
+        // console.log("values", Number(values) / MICRO_CCD);
+
+        const staked = Number(values.total_staked) / MICRO_CCD;
+
+        // console.log(staked);
+
+        setTotalStaked(staked.toString());
+        setTotalStakers(Number(values.stakers_length));
+        return values as string;
+      }
+    } catch (err) {
+      console.error("Error fetching products:", err);
+      // toast.error("Error fetching products", {
+      //   id: loading,
+      // });
+    }
+  };
+  useEffect(() => {
+    getTotalAmountStaked(rpc as ConcordiumGRPCClient, account, contract);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account, contract, rpc]);
+  return (
+    <Card className="w-full p-8">
+      <h2 className="text-2xl font-semibold text-gray-700 mb-6 flex items-center">
+        <svg
+          className="w-6 h-6 mr-2 text-blue-500"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+          />
+        </svg>
+        Protocol Statistics
+      </h2>
+
+      <div className="grid md:grid-cols-2 gap-8">
+        {/* Total Value Locked */}
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg p-6 border border-blue-100">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center">
+              <div className="p-2 bg-blue-100 rounded-lg mr-3">
+                <svg
+                  className="w-5 h-5 text-blue-600"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                  />
+                </svg>
+              </div>
+              <h3 className="text-gray-600 font-medium">Total Value Locked</h3>
+            </div>
+            <span className="text-xs font-semibold px-2 py-1 bg-blue-100 text-blue-800 rounded-full">
+              Live
+            </span>
+          </div>
+          <div className="flex items-baseline">
+            <span className="text-3xl font-bold text-gray-800">
+              {totalStaked}
+            </span>
+            <span className="ml-2 text-lg font-semibold text-gray-600">
+              CCD
+            </span>
+          </div>
+          <div className="mt-2 flex items-center text-sm text-gray-500">
+            <span className="flex items-center text-green-500">
+              <svg
+                className="w-4 h-4 mr-1"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
+                />
+              </svg>
+              +{tvlChange}%
+            </span>
+            <span className="ml-2">from last month</span>
+          </div>
+        </div>
+
+        {/* Total Rewards Paid */}
+        <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg p-6 border border-purple-100">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center">
+              <div className="p-2 bg-purple-100 rounded-lg mr-3">
+                <svg
+                  className="w-5 h-5 text-purple-600"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+              </div>
+              <h3 className="text-gray-600 font-medium">Total Rewards Paid</h3>
+            </div>
+            <span className="text-xs font-semibold px-2 py-1 bg-purple-100 text-purple-800 rounded-full">
+              Updated
+            </span>
+          </div>
+          <div className="flex items-baseline">
+            <span className="text-3xl font-bold text-gray-800">
+              {totalRewards.toLocaleString()}
+            </span>
+            <span className="ml-2 text-lg font-semibold text-gray-600">
+              CCD
+            </span>
+          </div>
+          <div className="mt-2 flex items-center text-sm text-gray-500">
+            <span className="font-medium">{totalStakers}</span>
+            <span className="ml-1">active stakers earning rewards</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6 pt-6 border-t border-gray-100">
+        <div className="flex items-center justify-between text-sm text-gray-500">
+          <span>Last updated: {lastUpdated}</span>
+          <a
+            href="#"
+            className="flex items-center text-blue-500 hover:text-blue-600 transition-colors"
+          >
+            View Details
+            <svg
+              className="w-4 h-4 ml-1"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M9 5l7 7-7 7"
+              />
+            </svg>
+          </a>
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+export default ProtocolStats;

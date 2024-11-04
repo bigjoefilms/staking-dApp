@@ -1,0 +1,11 @@
+cargo concordium build --schema-embed --out dist/techfiesta_minter.module.wasm.v1 --schema-out dist/schema.bin
+
+concordium-client module deploy dist/staking_dapp_module.wasm.v1 --sender my_wallet.json --name staking_dapp_module --grpc-ip grpc.testnet.concordium.com --grpc-port 20000 --secure
+
+
+concordium-client contract init staking_dapp_module --sender my_wallet.json --contract staking --name staking_dapp --energy 3000 --grpc-ip grpc.testnet.concordium.com --grpc-port 20000 --secure                    
+
+
+concordium-client contract update staking_dapp  --entrypoint stake --energy 3000 --amount 2 --sender my_wallet.json --schema dist/schema.bin --grpc-ip node.testnet.concordium.com 
+
+concordium-client contract invoke staking_dapp --entrypoint view_staker_info --energy 3000 --parameter-json params/staker_info.json --schema dist/schema.bin --grpc.testnet.concordium.com --grpc-port 20000 --secure

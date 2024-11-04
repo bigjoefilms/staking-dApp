@@ -1,5 +1,7 @@
 import localFont from "next/font/local";
 import "./globals.css";
+import ConnectWalletProvider from "@/provider/ConnectWalletProvider";
+import StateProvider from "@/provider/StateProvider";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -17,14 +19,19 @@ export const metadata = {
   description: "Stake your $CCD and get daily reward incentive",
 };
 
-export default function RootLayout({ children }) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-        suppressHydrationWarning
       >
-        {children}
+        <ConnectWalletProvider>
+          <StateProvider>{children}</StateProvider>
+        </ConnectWalletProvider>
       </body>
     </html>
   );
