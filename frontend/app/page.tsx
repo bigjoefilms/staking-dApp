@@ -1,6 +1,7 @@
 "use client";
 import ProtocolStats from "./components/protocolStats";
 import StakeInfoCard from "./components/stakeInfoCard";
+import StakeInfoCard2 from "./components/stakeInfoCard2";
 import StakeForm from "./components/stakeForm";
 import StakeHeader from "./components/stakeHeader";
 
@@ -17,6 +18,7 @@ export default function Home() {
         <ProtocolStats />
         <div className="mt-8">
           <StakeInfoCard />
+          {/* <StakeInfoCard2 /> */}
         </div>
         <StakeForm onSubmit={handleStakeSubmit} />
       </main>
