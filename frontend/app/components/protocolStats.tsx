@@ -19,6 +19,8 @@ import {
   serializeUpdateContractParameters,
 } from "@concordium/web-sdk";
 import React, { useEffect, useState } from "react";
+import LoadingPlaceholder from "./LoadingPlaceholder";
+import toast from "react-hot-toast";
 
 const Card = ({ className = "", children }: any) => (
   <div className={`bg-white shadow-md rounded-lg ${className}`}>{children}</div>
@@ -26,36 +28,29 @@ const Card = ({ className = "", children }: any) => (
 
 const ProtocolStats = ({
   // totalValueLocked = 10000,
-  totalRewards = 200,
+  // totalRewards = 200,
   tvlChange = 12.5,
   lastUpdated = new Date().toLocaleDateString(),
 }) => {
-  const [totalStaked, setTotalStaked] = useState("");
-  const [totalStakers, setTotalStakers] = useState(0);
+  const [stakeState, setStakeState] = useState<any>({
+    active_stakers: 0,
+    stakers_length: 0,
+    total_rewards_paid: "0",
+    total_staked: "0",
+  });
+  const [loadingProtocolStats, setLoadingProtocolStats] = useState(false);
   const { contract, account, rpc } = useWallet();
-  const getTotalAmountStaked = async (
-    rpc: ConcordiumGRPCClient,
-    account: string,
-    contract: any
-  ) => {
+
+  const viewState = async (rpc: ConcordiumGRPCClient, contract: any) => {
     const receiveName = "view_state";
 
     try {
+      setLoadingProtocolStats(true);
       if (contract) {
         console.log(contract);
         const contract_schema = await rpc?.getEmbeddedSchema(
           contract?.sourceModule
         );
-
-        // const serializedParameter = serializeUpdateContractParameters(
-        //   ContractName.fromString(CONTRACT_NAME),
-        //   EntrypointName.fromString(receiveName),
-        //   [account],
-        //   contract_schema,
-        //   SchemaVersion.V1
-        // );
-
-        // console.log(serializedParameter);
 
         const result = await rpc?.invokeContract({
           contract: contract && ContractAddress?.create(contract?.index, 0),
@@ -87,27 +82,28 @@ const ProtocolStats = ({
         );
 
         console.log(values);
-        // console.log("values", Number(values) / MICRO_CCD);
 
-        const staked = Number(values.total_staked) / MICRO_CCD;
+        setStakeState(values);
 
-        // console.log(staked);
+        setLoadingProtocolStats(false);
 
-        setTotalStaked(staked.toString());
-        setTotalStakers(Number(values.stakers_length));
+        toast.success("Protocol statistics fetched successfully");
+
         return values as string;
       }
     } catch (err) {
       console.error("Error fetching products:", err);
-      // toast.error("Error fetching products", {
-      //   id: loading,
-      // });
+      setLoadingProtocolStats(false);
+      toast.error("Error fetching protocol statistics");
     }
   };
+
   useEffect(() => {
-    getTotalAmountStaked(rpc as ConcordiumGRPCClient, account, contract);
+    viewState(rpc as ConcordiumGRPCClient, contract);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account, contract, rpc]);
+  }, [contract, rpc]);
+
+  // console.log(stakeState);
   return (
     <Card className="w-full p-8">
       <h2 className="text-2xl font-semibold text-gray-700 mb-6 flex items-center">
@@ -153,14 +149,22 @@ const ProtocolStats = ({
               Live
             </span>
           </div>
-          <div className="flex items-baseline">
-            <span className="text-3xl font-bold text-gray-800">
-              {totalStaked}
-            </span>
-            <span className="ml-2 text-lg font-semibold text-gray-600">
-              CCD
-            </span>
-          </div>
+
+          {loadingProtocolStats ? (
+            <div className="mt-4 animate-pulse">
+              <div className="h-8 bg-gray-200 rounded w-[130px]"></div>
+            </div>
+          ) : (
+            <div className="flex items-baseline">
+              <span className="text-3xl font-bold text-gray-800">
+                {Number(stakeState?.total_staked) / MICRO_CCD}
+              </span>
+              <span className="ml-2 text-lg font-semibold text-gray-600">
+                CCD
+              </span>
+            </div>
+          )}
+
           <div className="mt-2 flex items-center text-sm text-gray-500">
             <span className="flex items-center text-green-500">
               <svg
@@ -207,16 +211,25 @@ const ProtocolStats = ({
               Updated
             </span>
           </div>
-          <div className="flex items-baseline">
-            <span className="text-3xl font-bold text-gray-800">
-              {totalRewards.toLocaleString()}
-            </span>
-            <span className="ml-2 text-lg font-semibold text-gray-600">
-              CCD
-            </span>
-          </div>
+
+          {loadingProtocolStats ? (
+            <div className="mt-4 animate-pulse">
+              <div className="h-8 bg-gray-200 rounded w-[130px]"></div>
+            </div>
+          ) : (
+            <div className="flex items-baseline">
+              <span className="text-3xl font-bold text-gray-800">
+                {Number(stakeState?.total_rewards_paid) / MICRO_CCD}
+              </span>
+              <span className="ml-2 text-lg font-semibold text-gray-600">
+                CCD
+              </span>
+            </div>
+          )}
           <div className="mt-2 flex items-center text-sm text-gray-500">
-            <span className="font-medium">{totalStakers}</span>
+            <span className="font-medium">
+              {Number(stakeState.stakers_length)}
+            </span>
             <span className="ml-1">active stakers earning rewards</span>
           </div>
         </div>

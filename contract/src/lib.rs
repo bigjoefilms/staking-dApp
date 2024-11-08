@@ -37,6 +37,7 @@ pub struct State {
     total_staked: Amount,
     stakers_history: BTreeMap<AccountAddress, StakerInfo>,
     active_stakers: BTreeMap<AccountAddress, StakerInfo>,
+    total_rewards_paid: Amount,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -84,7 +85,7 @@ enum StakingError {
     NoUnbondingFound,
     ArithmeticError,
     AlreadySlashed,
-    // InvalidAmount,
+    InvalidAmount,
 }
 
 // ======== Contract Implementation ========
@@ -107,6 +108,7 @@ fn contract_init(ctx: &InitContext, _state_builder: &mut StateBuilder) -> InitRe
         total_staked: Amount::from_micro_ccd(0),
         stakers_history: BTreeMap::new(),
         active_stakers: BTreeMap::new(),
+        total_rewards_paid: Amount::from_micro_ccd(0),
     })
 }
 
@@ -357,6 +359,13 @@ fn complete_unstake(ctx: &ReceiveContext, host: &mut Host<State>) -> Result<(), 
         );
     }
 
+    let is_empty =
+        staker_info.staked_amount == Amount::from_micro_ccd(0) && staker_info.unbonding.is_empty();
+
+    if is_empty {
+        state.active_stakers.remove(&staker_account);
+    }
+
     host.invoke_transfer(&staker_account, total_withdrawal)
         .map_err(|_| StakingError::TransferError)?;
 
@@ -417,6 +426,8 @@ fn claim_rewards(ctx: &ReceiveContext, host: &mut Host<State>) -> Result<(), Sta
     if staker_empty {
         state.active_stakers.remove(&staker_account);
     }
+
+    state.total_rewards_paid += pending_rewards;
 
     // Transfer rewards after mutable borrow of `state` is released
     host.invoke_transfer(&staker_account, pending_rewards)
@@ -502,24 +513,24 @@ fn update_params(ctx: &ReceiveContext, host: &mut Host<State>) -> Result<(), Sta
     Ok(())
 }
 
-// #[receive(
-//     contract = "staking",
-//     name = "transfer_to_contact",
-//     error = "StakingError",
-//     payable,
-//     mutable
-// )]
-// fn trasfer_to_contract(
-//     _ctx: &ReceiveContext,
-//     _host: &mut Host<State>,
-//     amount: Amount,
-// ) -> Result<(), StakingError> {
-//     if amount.micro_ccd == 0 {
-//         return Err(StakingError::InvalidAmount);
-//     }
+#[receive(
+    contract = "staking",
+    name = "transfer_to_contact",
+    error = "StakingError",
+    payable,
+    mutable
+)]
+fn trasfer_to_contract(
+    _ctx: &ReceiveContext,
+    _host: &mut Host<State>,
+    amount: Amount,
+) -> Result<(), StakingError> {
+    if amount.micro_ccd == 0 {
+        return Err(StakingError::InvalidAmount);
+    }
 
-//     Ok(())
-// }
+    Ok(())
+}
 
 // ======== Helper Functions ========
 
@@ -618,6 +629,7 @@ pub struct ViewState {
     total_staked: Amount,
     stakers_length: u64,
     active_stakers: u64,
+    total_rewards_paid: Amount,
 }
 
 /// View function to get total staked amount
@@ -629,5 +641,6 @@ fn view_state(_ctx: &ReceiveContext, host: &Host<State>) -> ReceiveResult<ViewSt
         total_staked: state.total_staked,
         stakers_length: state.stakers_history.len() as u64,
         active_stakers: state.active_stakers.len() as u64,
+        total_rewards_paid: state.total_rewards_paid,
     })
 }
