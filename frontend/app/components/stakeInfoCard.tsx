@@ -196,7 +196,13 @@ const StakeInfoCard = () => {
                 Number(stakerInfo?.pending_rewards || 0) / MICRO_CCD
               } CCD`}</p>
               <button
-                onClick={() => claimRewards()}
+                onClick={() => {
+                  if (Number(stakerInfo?.pending_rewards || 0) == 0) {
+                    toast.error("Rewards must be greater than zero");
+                  } else {
+                    claimRewards();
+                  }
+                }}
                 className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-6 rounded-lg transition-colors duration-200"
               >
                 {claimRewardsLoading ? (
