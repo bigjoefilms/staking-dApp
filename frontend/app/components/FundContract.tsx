@@ -20,7 +20,7 @@ const FundContract = () => {
   const fundContract = async (amount: number) => {
     // const loading = toast.loading("Creating campaign...");
     try {
-      const transaction = connection?.signAndSendTransaction(
+      const transaction = await connection?.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
         {

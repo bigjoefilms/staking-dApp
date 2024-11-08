@@ -32,7 +32,7 @@ const StakeForm = () => {
   const stake = async (amount: number) => {
     // const loading = toast.loading("Creating campaign...");
     try {
-      const transaction = connection?.signAndSendTransaction(
+      const transaction = await connection?.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
         {
@@ -84,7 +84,7 @@ const StakeForm = () => {
         schema: moduleSchemaFromBase64(schemaToBase64),
       };
 
-      const transaction = connection?.signAndSendTransaction(
+      const transaction = await connection?.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
         {

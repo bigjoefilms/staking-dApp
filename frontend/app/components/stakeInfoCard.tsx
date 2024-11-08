@@ -125,7 +125,7 @@ const StakeInfoCard = () => {
 
   const completeUnstake = async () => {
     try {
-      const transaction = connection?.signAndSendTransaction(
+      const transaction = await connection?.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
         {
@@ -158,7 +158,7 @@ const StakeInfoCard = () => {
   const claimRewards = async () => {
     // const loading = toast.loading("Creating campaign...");
     try {
-      const transaction = connection?.signAndSendTransaction(
+      const transaction = await connection?.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
         {
