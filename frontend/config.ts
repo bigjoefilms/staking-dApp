@@ -6,7 +6,8 @@ import {
 } from "@concordium/react-components";
 
 // export const DEFAULT_CONTRACT_INDEX = BigInt(10303);
-export const DEFAULT_CONTRACT_INDEX = BigInt(10306);
+// export const DEFAULT_CONTRACT_INDEX = BigInt(10306);
+export const DEFAULT_CONTRACT_INDEX = BigInt(10315);
 export const MAX_CONTRACT_EXECUTION_ENERGY = BigInt(30000);
 // export const VERIFIER_URL = "http://localhost:8080/api";
 // export const VERIFIER_URL =

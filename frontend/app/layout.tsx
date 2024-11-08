@@ -2,6 +2,7 @@ import localFont from "next/font/local";
 import "./globals.css";
 import ConnectWalletProvider from "@/provider/ConnectWalletProvider";
 import StateProvider from "@/provider/StateProvider";
+import { Toaster } from "react-hot-toast";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -31,6 +32,7 @@ export default function RootLayout({
       >
         <ConnectWalletProvider>
           <StateProvider>{children}</StateProvider>
+          <Toaster position="bottom-right" />
         </ConnectWalletProvider>
       </body>
     </html>

@@ -203,9 +203,9 @@ const StakeInfoCard = () => {
   const StakesList = () => (
     <div>
       <h3 className="text-xl font-semibold text-gray-700 mb-4">Your Stakes</h3>
-      {stakeData.stakes.map((stake) => (
+      {/* {stakeData.stakes.map((stake) => (
         <StakeCard key={stake.id} stake={stake} />
-      ))}
+      ))} */}
     </div>
   );
 
