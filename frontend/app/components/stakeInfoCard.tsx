@@ -35,93 +35,99 @@ import Info from "@/app/assets/info.png";
 const StakeInfoCard = () => {
   // State management
   const [isWalletConnected, setIsWalletConnected] = useState(false);
-  const [stakeData, setStakeData] = useState({
-    amount: 0,
-    accumulatedReward: 0,
-    duration: 0,
-    startTime: 0,
-  });
-  const [loadingUserStakeInfo, setLoadingUserStakeInfo] = useState(false);
+  // const [stakeData, setStakeData] = useState({
+  //   amount: 0,
+  //   accumulatedReward: 0,
+  //   duration: 0,
+  //   startTime: 0,
+  // });
+  // const [loadingUserStakeInfo, setLoadingUserStakeInfo] = useState(false);
 
   const { connect, account, contract, rpc, connection } = useWallet();
-  const { setStakerInfo, stakerInfo } = useStateProvider();
+  const {
+    setStakerInfo,
+    stakerInfo,
+    loadingUserStakeInfo,
+    setLoadingUserStakeInfo,
+    getStakerInfo,
+  } = useStateProvider();
 
   const currentTime = getCurrentDateTime();
 
-  const getStakerInfo = async (
-    rpc: ConcordiumGRPCClient,
-    account: string,
-    contract: any
-  ) => {
-    const receiveName = "view_staker_info";
+  // const getStakerInfo = async (
+  //   rpc: ConcordiumGRPCClient,
+  //   account: string,
+  //   contract: any
+  // ) => {
+  //   const receiveName = "view_staker_info";
 
-    try {
-      setLoadingUserStakeInfo(true);
-      if (contract) {
-        const contract_schema = await rpc?.getEmbeddedSchema(
-          contract?.sourceModule
-        );
+  //   try {
+  //     setLoadingUserStakeInfo(true);
+  //     if (contract) {
+  //       const contract_schema = await rpc?.getEmbeddedSchema(
+  //         contract?.sourceModule
+  //       );
 
-        const serializedParameter = serializeUpdateContractParameters(
-          ContractName.fromString(CONTRACT_NAME),
-          EntrypointName.fromString(receiveName),
-          account,
-          contract_schema,
-          SchemaVersion.V1
-        );
+  //       const serializedParameter = serializeUpdateContractParameters(
+  //         ContractName.fromString(CONTRACT_NAME),
+  //         EntrypointName.fromString(receiveName),
+  //         account,
+  //         contract_schema,
+  //         SchemaVersion.V1
+  //       );
 
-        const result = await rpc?.invokeContract({
-          contract: contract && ContractAddress?.create(contract?.index, 0),
-          method:
-            contract &&
-            ReceiveName?.create(
-              contract?.name,
-              EntrypointName?.fromString(receiveName)
-            ),
-          energy: Energy.create(MAX_CONTRACT_EXECUTION_ENERGY),
-          invoker: AccountAddress?.fromJSON(account),
-          parameter: serializedParameter,
-        });
-        const buffer = Buffer.from(result.returnValue?.buffer as Uint8Array);
-        const newschema = Buffer?.from(contract_schema).buffer;
+  //       const result = await rpc?.invokeContract({
+  //         contract: contract && ContractAddress?.create(contract?.index, 0),
+  //         method:
+  //           contract &&
+  //           ReceiveName?.create(
+  //             contract?.name,
+  //             EntrypointName?.fromString(receiveName)
+  //           ),
+  //         energy: Energy.create(MAX_CONTRACT_EXECUTION_ENERGY),
+  //         invoker: AccountAddress?.fromJSON(account),
+  //         parameter: serializedParameter,
+  //       });
+  //       const buffer = Buffer.from(result.returnValue?.buffer as Uint8Array);
+  //       const newschema = Buffer?.from(contract_schema).buffer;
 
-        const name = ContractName?.fromString(CONTRACT_NAME);
-        const entry_point = EntrypointName?.fromString(receiveName);
+  //       const name = ContractName?.fromString(CONTRACT_NAME);
+  //       const entry_point = EntrypointName?.fromString(receiveName);
 
-        const values = await deserializeReceiveReturnValue(
-          buffer,
-          contract_schema,
-          name,
-          entry_point,
-          SchemaVersion?.V1
-        );
-        console.log(values);
-        const data = values?.Some[0] || values?.None[0];
+  //       const values = await deserializeReceiveReturnValue(
+  //         buffer,
+  //         contract_schema,
+  //         name,
+  //         entry_point,
+  //         SchemaVersion?.V1
+  //       );
+  //       console.log(values);
+  //       const data = values?.Some[0] || values?.None[0];
 
-        console.log("Extracted data:", data);
+  //       console.log("Extracted data:", data);
 
-        if (data) {
-          setStakerInfo(data);
-          setStakeData({
-            amount: Number(data.staked_amount) / MICRO_CCD,
-            accumulatedReward: data.pending_rewards / MICRO_CCD,
-            duration: 0,
-            startTime: data.last_reward_timestamp,
-          });
-        } else {
-          console.error("No data found in the deserialized response.");
-        }
-        setLoadingUserStakeInfo(false);
-        toast.success("User Stake Information fetched successfully");
-        return values as string;
-      }
-    } catch (err) {
-      setLoadingUserStakeInfo(false);
+  //       if (data) {
+  //         setStakerInfo(data);
+  //         setStakeData({
+  //           amount: Number(data.staked_amount) / MICRO_CCD,
+  //           accumulatedReward: data.pending_rewards / MICRO_CCD,
+  //           duration: 0,
+  //           startTime: data.last_reward_timestamp,
+  //         });
+  //       } else {
+  //         console.error("No data found in the deserialized response.");
+  //       }
+  //       setLoadingUserStakeInfo(false);
+  //       toast.success("User Stake Information fetched successfully");
+  //       return values as string;
+  //     }
+  //   } catch (err) {
+  //     setLoadingUserStakeInfo(false);
 
-      console.error("Error fetching user stake information:", err);
-      toast.error("Error fetching user stake information");
-    }
-  };
+  //     console.error("Error fetching user stake information:", err);
+  //     toast.error("Error fetching user stake information");
+  //   }
+  // };
 
   const completeUnstake = async () => {
     try {
@@ -145,9 +151,9 @@ const StakeInfoCard = () => {
       //   toast.success("Campaign successfully created", {
       //     id: loading,
       //   });
-      // setTimeout(() => {
-      //   // getProject();
-      // }, 10000);
+      setTimeout(async () => {
+        await getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
+      }, 10000);
       return transaction;
     } catch (error) {
       toast.error("Error completing unstake");
@@ -176,9 +182,10 @@ const StakeInfoCard = () => {
       );
       // transaction &&
       toast.success("Reward claimed successfully");
-      // setTimeout(() => {
-      //   // getProject();
-      // }, 10000);
+      setTimeout(() => {
+        // getProject();
+        getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
+      }, 10000);
       return transaction;
     } catch (error) {
       toast.error("Error claiming rewards");
@@ -209,20 +216,22 @@ const StakeInfoCard = () => {
           <div className="grid grid-cols-2 gap-4 ">
             <StakeMetric
               label="Staked Amount"
-              value={`${stakeData.amount} CCD`}
+              value={`${Number(stakerInfo?.staked_amount) / MICRO_CCD} CCD`}
             />
 
             <StakeMetric
               label="Start Date"
-              value={`${formatDate(stakeData.startTime)}, ${formatTime(
-                stakeData.startTime
-              )}`}
+              value={`${formatDate(
+                stakerInfo?.last_reward_timestamp
+              )}, ${formatTime(stakerInfo?.last_reward_timestamp)}`}
             />
           </div>
           <div className="text-gray-600 mt-4">
             <p>Accumulated Reward</p>
             <div className="flex items-center justify-between w-full gap-5">
-              <p className="text-2xl font-bold text-gray-800">{`${stakeData.accumulatedReward} CCD`}</p>
+              <p className="text-2xl font-bold text-gray-800">{`${
+                Number(stakerInfo?.pending_rewards) / MICRO_CCD
+              } CCD`}</p>
               <button
                 onClick={() => claimRewards()}
                 className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded"

@@ -4,6 +4,7 @@ import { moduleSchemaFromBase64 } from "@concordium/react-components";
 import {
   AccountTransactionType,
   CcdAmount,
+  ConcordiumGRPCClient,
   ContractAddress,
   Energy,
   EntrypointName,
@@ -14,12 +15,14 @@ import React, { useState } from "react";
 import Info from "@/app/assets/info.png";
 import { getCurrentDateTime } from "@/utils/utils";
 import toast from "react-hot-toast";
+import { useStateProvider } from "@/provider/StateProvider";
 
 const StakeForm = () => {
   const [stakeAmount, setStakeAmount] = useState("");
   const [activeOption, setActiveOption] = useState("stake");
 
   const { connection, account, contract, rpc } = useWallet();
+  const { getStakerInfo } = useStateProvider();
 
   const handleStakeOption = (option: string) => {
     setActiveOption(option);
@@ -53,9 +56,9 @@ const StakeForm = () => {
       //   toast.success("Campaign successfully created", {
       //     id: loading,
       //   });
-      // setTimeout(() => {
-      //   // getProject();
-      // }, 10000);
+      setTimeout(async () => {
+        await getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
+      }, 10000);
       return transaction;
     } catch (error) {
       toast.error("Error staking CCD");
@@ -106,9 +109,9 @@ const StakeForm = () => {
       //   toast.success("Campaign successfully created", {
       //     id: loading,
       //   });
-      // setTimeout(() => {
-      //   // getProject();
-      // }, 10000);
+      setTimeout(async () => {
+        await getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
+      }, 10000);
       return transaction;
     } catch (error) {
       toast.error("Error initiating unstake");
