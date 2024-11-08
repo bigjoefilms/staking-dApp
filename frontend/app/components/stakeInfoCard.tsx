@@ -258,7 +258,7 @@ const StakeInfoCard = () => {
       </div>
 
       {/* Unbonding Period Section */}
-      {stakerInfo && stakerInfo?.unbonding?.length >= 0 && (
+      {stakerInfo && stakerInfo?.unbonding?.length > 0 && (
         <div className="bg-white shadow-lg rounded-lg p-8 mb-8">
           <div className="flex items-center mb-6">
             <svg
