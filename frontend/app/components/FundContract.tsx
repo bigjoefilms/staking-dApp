@@ -48,6 +48,14 @@ const FundContract = () => {
       console.error(error);
     }
   };
+
+  if (!account) {
+    return;
+  }
+  if (account !== contract?.owner?.address) {
+    return;
+  }
+
   return (
     <div className=" mb-10 bg-white shadow-md rounded-lg p-6 text-gray-700 ">
       <label htmlFor="amount" className="block text-gray-700 font-bold mb-2">
