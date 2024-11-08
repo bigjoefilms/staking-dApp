@@ -16,13 +16,15 @@ import Info from "@/app/assets/info.png";
 import { getCurrentDateTime } from "@/utils/utils";
 import toast from "react-hot-toast";
 import { useStateProvider } from "@/provider/StateProvider";
+import { BeatLoader } from "react-spinners";
 
 const StakeForm = () => {
   const [stakeAmount, setStakeAmount] = useState("");
   const [activeOption, setActiveOption] = useState("stake");
+  const [stakeLoading, setStakeLoading] = useState(false);
 
   const { connection, account, contract, rpc } = useWallet();
-  const { getStakerInfo } = useStateProvider();
+  const { getStakerInfo, viewState } = useStateProvider();
 
   const handleStakeOption = (option: string) => {
     setActiveOption(option);
@@ -34,6 +36,7 @@ const StakeForm = () => {
 
   const stake = async (amount: number) => {
     // const loading = toast.loading("Creating campaign...");
+    setStakeLoading(true);
     try {
       const transaction = await connection?.signAndSendTransaction(
         account,
@@ -58,17 +61,22 @@ const StakeForm = () => {
       //   });
       setTimeout(async () => {
         await getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
+        await viewState(rpc as ConcordiumGRPCClient, contract);
       }, 10000);
+      setStakeLoading(false);
+
       return transaction;
     } catch (error) {
       toast.error("Error staking CCD");
       console.error(error);
+      setStakeLoading(false);
     }
   };
 
   const initiateUnstake = async (amount: number) => {
     // const loading = toast.loading("Creating campaign...");
     try {
+      setStakeLoading(true);
       const schema = await rpc?.getEmbeddedSchema(contract?.sourceModule);
 
       // convert schema to base64……..
@@ -111,11 +119,14 @@ const StakeForm = () => {
       //   });
       setTimeout(async () => {
         await getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
+        await viewState(rpc as ConcordiumGRPCClient, contract);
       }, 10000);
+      setStakeLoading(false);
       return transaction;
     } catch (error) {
       toast.error("Error initiating unstake");
       console.error(error);
+      setStakeLoading(false);
     }
   };
 
@@ -168,9 +179,11 @@ const StakeForm = () => {
           />
         </div>
         {activeOption !== "stake" && (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 mt-6 p-4 bg-blue-50 rounded-lg">
             <Image src={Info} alt="Info" className="w-[15px]" />
-            <p className="text-sm">There is a 1 day unbounding period</p>
+            <p className="text-sm text-blue-800">
+              There is a 1 day unbounding period
+            </p>
           </div>
         )}
 
@@ -193,7 +206,13 @@ const StakeForm = () => {
             }
           }}
         >
-          {activeOption === "stake" ? "Stake" : "Initiate Unstake"}
+          {stakeLoading ? (
+            <BeatLoader color="#fff" />
+          ) : activeOption === "stake" ? (
+            "Stake"
+          ) : (
+            "Initiate Unstake"
+          )}
         </button>
       </form>
     </div>

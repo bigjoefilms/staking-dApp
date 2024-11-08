@@ -1,102 +1,73 @@
-import {
-  CONTRACT_NAME,
-  MAX_CONTRACT_EXECUTION_ENERGY,
-  MICRO_CCD,
-} from "@/config";
+import { MICRO_CCD } from "@/config";
 import { useStateProvider } from "@/provider/StateProvider";
 import { useWallet } from "@/provider/WalletProvider";
-import {
-  AccountAddress,
-  CcdAmount,
-  ConcordiumGRPCClient,
-  ContractAddress,
-  ContractName,
-  deserializeReceiveReturnValue,
-  Energy,
-  EntrypointName,
-  ReceiveName,
-  SchemaVersion,
-  serializeUpdateContractParameters,
-} from "@concordium/web-sdk";
-import React, { useEffect, useState } from "react";
-import LoadingPlaceholder from "./LoadingPlaceholder";
-import toast from "react-hot-toast";
+import { ConcordiumGRPCClient } from "@concordium/web-sdk";
+import React, { useEffect } from "react";
 
 const Card = ({ className = "", children }: any) => (
   <div className={`bg-white shadow-md rounded-lg ${className}`}>{children}</div>
 );
 
-const ProtocolStats = ({
-  // totalValueLocked = 10000,
-  // totalRewards = 200,
-  tvlChange = 12.5,
-  lastUpdated = new Date().toLocaleDateString(),
-}) => {
-  const [stakeState, setStakeState] = useState<any>({
-    active_stakers: 0,
-    stakers_length: 0,
-    total_rewards_paid: "0",
-    total_staked: "0",
-  });
-  const [loadingProtocolStats, setLoadingProtocolStats] = useState(false);
-  const { contract, account, rpc } = useWallet();
+const ProtocolStats = () => {
+  const { contract, rpc } = useWallet();
+  const { loadingProtocolStats, viewState, stakeState } = useStateProvider();
 
-  const viewState = async (rpc: ConcordiumGRPCClient, contract: any) => {
-    const receiveName = "view_state";
+  // const viewState = async (rpc: ConcordiumGRPCClient, contract: any) => {
+  //   const receiveName = "view_state";
 
-    try {
-      setLoadingProtocolStats(true);
-      if (contract) {
-        console.log(contract);
-        const contract_schema = await rpc?.getEmbeddedSchema(
-          contract?.sourceModule
-        );
+  //   try {
+  //     setLoadingProtocolStats(true);
+  //     if (contract) {
+  //       console.log(contract);
+  //       const contract_schema = await rpc?.getEmbeddedSchema(
+  //         contract?.sourceModule
+  //       );
 
-        const result = await rpc?.invokeContract({
-          contract: contract && ContractAddress?.create(contract?.index, 0),
-          method:
-            contract &&
-            ReceiveName?.create(
-              contract?.name,
-              EntrypointName?.fromString(receiveName)
-            ),
-          energy: Energy.create(MAX_CONTRACT_EXECUTION_ENERGY),
-          // invoker: AccountAddress?.fromJSON(account),
-          // parameter: serializedParameter,
-        });
-        console.log(result.returnValue);
-        const buffer = Buffer.from(result.returnValue?.buffer as Uint8Array);
-        const newschema = Buffer?.from(contract_schema).buffer;
+  //       const result = await rpc?.invokeContract({
+  //         contract: contract && ContractAddress?.create(contract?.index, 0),
+  //         method:
+  //           contract &&
+  //           ReceiveName?.create(
+  //             contract?.name,
+  //             EntrypointName?.fromString(receiveName)
+  //           ),
+  //         energy: Energy.create(MAX_CONTRACT_EXECUTION_ENERGY),
+  //         // invoker: AccountAddress?.fromJSON(account),
+  //         // parameter: serializedParameter,
+  //       });
+  //       console.log(result.returnValue);
+  //       const buffer = Buffer.from(result.returnValue?.buffer as Uint8Array);
+  //       const newschema = Buffer?.from(contract_schema).buffer;
 
-        console.log(newschema);
-        const name = ContractName?.fromString(CONTRACT_NAME);
-        const entry_point = EntrypointName?.fromString(receiveName);
-        console.log(contract_schema);
+  //       console.log(newschema);
+  //       const name = ContractName?.fromString(CONTRACT_NAME);
+  //       const entry_point = EntrypointName?.fromString(receiveName);
+  //       console.log(contract_schema);
 
-        const values = await deserializeReceiveReturnValue(
-          buffer,
-          contract_schema,
-          name,
-          entry_point,
-          SchemaVersion?.V1
-        );
+  //       const values = await deserializeReceiveReturnValue(
+  //         buffer,
+  //         contract_schema,
+  //         name,
+  //         entry_point,
+  //         SchemaVersion?.V1
+  //       );
 
-        console.log(values);
+  //       console.log(values);
 
-        setStakeState(values);
+  //       setStakeState(values);
 
-        setLoadingProtocolStats(false);
+  //       setLoadingProtocolStats(false);
 
-        toast.success("Protocol statistics fetched successfully");
+  //       toast.success("Protocol statistics fetched successfully");
 
-        return values as string;
-      }
-    } catch (err) {
-      console.error("Error fetching products:", err);
-      setLoadingProtocolStats(false);
-      toast.error("Error fetching protocol statistics");
-    }
-  };
+  //       return values as string;
+  //     }
+  //   } catch (err) {
+  //     console.error("Error fetching products:", err);
+  //     setLoadingProtocolStats(false);
+  //     toast.error("Error fetching protocol statistics");
+  //   }
+  // };
 
   useEffect(() => {
     viewState(rpc as ConcordiumGRPCClient, contract);
@@ -180,7 +151,7 @@ const ProtocolStats = ({
                   d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
                 />
               </svg>
-              +{tvlChange}%
+              +12.5%
             </span>
             <span className="ml-2">from last month</span>
           </div>
@@ -232,31 +203,6 @@ const ProtocolStats = ({
             </span>
             <span className="ml-1">active stakers earning rewards</span>
           </div>
-        </div>
-      </div>
-
-      <div className="mt-6 pt-6 border-t border-gray-100">
-        <div className="flex items-center justify-between text-sm text-gray-500">
-          <span>Last updated: {lastUpdated}</span>
-          <a
-            href="#"
-            className="flex items-center text-blue-500 hover:text-blue-600 transition-colors"
-          >
-            View Details
-            <svg
-              className="w-4 h-4 ml-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 5l7 7-7 7"
-              />
-            </svg>
-          </a>
         </div>
       </div>
     </Card>

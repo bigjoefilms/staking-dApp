@@ -11,15 +11,17 @@ import {
 
 import React, { useState } from "react";
 import toast from "react-hot-toast";
+import { BeatLoader } from "react-spinners";
 
 const FundContract = () => {
   const [stakeAmount, setStakeAmount] = useState("");
+  const [loadingFundContract, setLoadingFundContract] = useState(false);
 
   const { contract, account, connection } = useWallet();
 
   const fundContract = async (amount: number) => {
-    // const loading = toast.loading("Creating campaign...");
     try {
+      setLoadingFundContract(true);
       const transaction = await connection?.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
@@ -34,19 +36,15 @@ const FundContract = () => {
             MAX_CONTRACT_EXECUTION_ENERGY
           ),
         }
-        // params
       );
       toast.success(`Successfully funded ${amount} CCD to the contract`);
-      // transaction &&
-      //   toast.success("Campaign successfully created", {
-      //     id: loading,
-      //   });
-      // setTimeout(() => {
-      //   // getProject();
-      // }, 10000);
+      setLoadingFundContract(false);
+
       return transaction;
     } catch (error) {
       toast.error("Error funding contract");
+      setLoadingFundContract(false);
+
       console.error(error);
     }
   };
@@ -81,7 +79,7 @@ const FundContract = () => {
           }
         }}
       >
-        Fund Contract
+        {loadingFundContract ? <BeatLoader color="#fff" /> : " Fund Contract"}
       </button>
     </div>
   );

@@ -37,9 +37,6 @@ export function compareTimestamps(currentTime: string, unlockTime: string) {
   const datetime1 = new Date(currentTime);
   const datetime2 = new Date(unlockTime);
 
-  if (datetime1 >= datetime2) {
-    return true;
-  } else {
-    return false;
-  }
+  console.log(datetime1 >= datetime2);
+  return datetime1 >= datetime2;
 }
