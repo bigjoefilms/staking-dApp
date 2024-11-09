@@ -1,6 +1,6 @@
-# Concordium Staking Contract
+# Concordium Staking
 
-A smart contract implementation for staking CCD tokens on the Concordium blockchain with features for reward distribution, unbonding, and slashing.
+An implementation for staking CCD tokens on the Concordium blockchain with features for reward distribution, unbonding, and slashing.
 
 ## Features
 
@@ -31,11 +31,17 @@ Initial parameters include:
 - Default slashing rate: 5%
 - Auto-compound: Disabled by default
 
-## Documentation & Guides
+## Useful Resources
 
+- **Demo Website**: https://concordium-staking-dapp.vercel.app/ 
+- **Demo Video:** https://www.loom.com/share/755af47827f9400181455967049c7c0d?sid=365f05ef-2c70-47c2-8dae-9665aaf878c9
 - **Technical Guide**: Detailed documentation covering contract architecture, functions, and implementation details can be found [here](https://docs.google.com/document/d/1mHLZS9ARk23irieS1lyk2tIizlAh_ZK7Q0Prt-VSKZo/edit?usp=sharing)
 - **Concordium Guide**: Step-by-step instructions for installing the concordium client in the [documentation](https://developer.concordium.software/en/mainnet/smart-contracts/guides/setup-tools.html)
 - **Frontend Interface**: [Simple UI for interacting with the staking contract](https://concordium-staking-dapp.vercel.app/)
+- **Concordium Documentation:** https://developer.concordium.software/
+- **Concordium Website:** https://www.concordium.com/
+- **Concordium Support:** https://support.concordium.software/
+- **Discord:** https://discord.com/invite/GpKGE2hCFx
 
 ## Frontend Local Host Setup
 - Cd into the `frontend` folder
