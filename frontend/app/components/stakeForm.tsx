@@ -55,6 +55,7 @@ const StakeForm = () => {
         // params
       );
       toast.success(`Successfully Staked ${amount} CCD`);
+      setStakeAmount("");
       // transaction &&
       //   toast.success("Campaign successfully created", {
       //     id: loading,
@@ -113,6 +114,7 @@ const StakeForm = () => {
         params
       );
       toast.success("Unstake successfully initiated");
+      setStakeAmount("");
       // transaction &&
       //   toast.success("Campaign successfully created", {
       //     id: loading,
