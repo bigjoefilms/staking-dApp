@@ -1,490 +1,646 @@
-#![cfg_attr(not(feature = "std"), no_std)]
-
-use concordium_cis2::*;
 use concordium_std::*;
 use core::fmt::Debug;
 use std::collections::BTreeMap;
 
-/// Token amount type
-type TokenAmount = u64;
-/// Contract token ID type
-type ContractTokenId = TokenIdU8;
+// ======== Type Definitions ========
 
-/// Represents a token pair in the DEX
-#[derive(Serialize, SchemaType, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TokenPair {
-    token0_address: ContractAddress,
-    token1_address: ContractAddress,
-    token0_id: ContractTokenId,
-    token1_id: ContractTokenId,
+#[derive(Serialize, SchemaType, Clone, Debug)]
+pub struct StakingParams {
+    minimum_stake: Amount,
+    maximum_stake: Amount, // Added maximum stake limit
+    reward_rate: u64,
+    unbonding_period: u64,
+    accepting_stakes: bool,
+    slashing_rate: u64,  // Added slashing rate (in basis points)
+    auto_compound: bool, // Added auto-compound flag
 }
 
-/// Represents a liquidity pool for a token pair
+#[derive(Serialize, SchemaType, Clone, Debug)]
+pub struct Unbounding {
+    amount: Amount,
+    unlock_time: Timestamp,
+}
+
 #[derive(Serialize, SchemaType, Clone)]
-pub struct LiquidityPool {
-    token0_reserve: TokenAmount,
-    token1_reserve: TokenAmount,
-    total_shares: TokenAmount,
+pub struct StakerInfo {
+    staked_amount: Amount,
+    last_reward_timestamp: Timestamp,
+    pending_rewards: Amount,
+    unbonding: Vec<Unbounding>,
+    slashed: bool, // Track if staker has been slashed
 }
 
-/// Main contract state
 #[derive(Serialize, SchemaType)]
 pub struct State {
-    /// Maps token pair to their liquidity pool
-    pools: BTreeMap<TokenPair, LiquidityPool>,
-    /// Maps address to their liquidity shares for each pool
-    shares: BTreeMap<(TokenPair, AccountAddress), TokenAmount>,
+    admin: AccountAddress,
+    params: StakingParams,
+    total_staked: Amount,
+    stakers_history: BTreeMap<AccountAddress, StakerInfo>,
+    active_stakers: BTreeMap<AccountAddress, StakerInfo>,
+    total_rewards_paid: Amount,
 }
 
-/// Contract errors
-#[derive(Debug, PartialEq, Eq, Reject, Serialize, SchemaType)]
-pub enum CustomError {
-    ParseError,
-    InsufficientLiquidity,
-    PoolNotFound,
-    InvalidTokenPair,
-    InsufficientAmount,
-    InsufficientShares,
+#[derive(Debug, Serialize, Clone)]
+enum StakingEvent {
+    Staked {
+        staker: AccountAddress,
+        amount: Amount,
+    },
+    UnstakingInitiated {
+        staker: AccountAddress,
+        amount: Amount,
+        unlock_time: Timestamp,
+    },
+    UnstakingCompleted {
+        staker: AccountAddress,
+        amount: Amount,
+    },
+    RewardsClaimed {
+        staker: AccountAddress,
+        amount: Amount,
+    },
+    ParamsUpdated {
+        new_params: StakingParams,
+    },
+    Slashed {
+        staker: AccountAddress,
+        amount: Amount,
+    },
+    RewardsCompounded {
+        staker: AccountAddress,
+        amount: Amount,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq, Reject, Serial, Clone, SchemaType)]
+enum StakingError {
+    ParseParamsError,
+    NotAdmin,
+    StakingDisabled,
+    InsufficientStakeAmount,
+    ExcessiveStakeAmount,
+    InsufficientBalance,
+    NoStakeFound,
     TransferError,
-    UnauthorizedToken,
-    FailedTokenTransfer,
+    NoUnbondingFound,
     ArithmeticError,
-    InvalidState,
+    AlreadySlashed,
+    InvalidAmount,
 }
 
-/// Parameters for adding liquidity
-#[derive(Serialize, SchemaType)]
-pub struct AddLiquidityParams {
-    token_pair: TokenPair,
-    amount0: TokenAmount,
-    amount1: TokenAmount,
-    min_liquidity: TokenAmount,
-}
+// ======== Contract Implementation ========
 
-/// Parameters for swapping tokens
-#[derive(Serialize, SchemaType)]
-pub struct SwapParams {
-    token_pair: TokenPair,
-    amount_in: TokenAmount,
-    min_amount_out: TokenAmount,
-    is_token0: bool,
-}
+#[init(contract = "staking", parameter = "StakingParams")]
+fn contract_init(ctx: &InitContext, _state_builder: &mut StateBuilder) -> InitResult<State> {
+    let params = StakingParams {
+        minimum_stake: Amount::from_micro_ccd(1000),
+        maximum_stake: Amount::from_micro_ccd(1_000_000_000), // 1000 CCD
+        reward_rate: 1000,
+        unbonding_period: 86400,
+        accepting_stakes: true,
+        slashing_rate: 500, // 5% in basis points
+        auto_compound: false,
+    };
 
-/// Parameters for removing liquidity
-#[derive(Serialize, SchemaType)]
-pub struct RemoveLiquidityParams {
-    token_pair: TokenPair,
-    shares: TokenAmount,
-    min_amount0: TokenAmount,
-    min_amount1: TokenAmount,
-}
-
-impl State {
-    fn empty() -> Self {
-        State {
-            pools: BTreeMap::new(),
-            shares: BTreeMap::new(),
-        }
-    }
-}
-
-/// Creates a new instance of the smart contract.
-#[init(contract = "dex_contract")]
-fn init(_ctx: &InitContext, _state_builder: &mut StateBuilder) -> InitResult<State> {
-    Ok(State::empty())
-}
-
-/// Helper function to transfer CIS-2 tokens
-fn transfer_token(
-    host: &mut Host<State>,
-    token_address: &ContractAddress,
-    token_id: &ContractTokenId,
-    from: &Address,
-    to: &Receiver,
-    amount: TokenAmountU64,
-) -> Result<(), CustomError> {
-    let parameter = TransferParams::from(vec![Transfer {
-        from: *from,
-        token_id: *token_id,
-        data: AdditionalData::empty(),
-        to: to.clone(),
-        amount: amount,
-    }]);
-
-    host.invoke_contract(
-        token_address,
-        &parameter,
-        EntrypointName::new("transfer").unwrap(),
-        Amount::zero(),
-    )
-    .map_err(|_| CustomError::TransferError)?;
-
-    Ok(())
-}
-
-/// Helper function to safely perform arithmetic operations
-fn checked_arithmetic<F>(f: F) -> Result<TokenAmount, CustomError>
-where
-    F: FnOnce() -> Option<TokenAmount>,
-{
-    f().ok_or(CustomError::ArithmeticError)
-}
-
-fn sqrt_token_amount(amount: TokenAmount) -> Option<TokenAmount> {
-    let value: u64 = amount.into();
-    let mut x: u64 = value;
-    let mut y: u64 = (x + 1) / 2;
-
-    while y < x {
-        x = y;
-        y = (x + value / x) / 2;
-    }
-
-    Some(x)
+    Ok(State {
+        admin: ctx.init_origin(),
+        params,
+        total_staked: Amount::from_micro_ccd(0),
+        stakers_history: BTreeMap::new(),
+        active_stakers: BTreeMap::new(),
+        total_rewards_paid: Amount::from_micro_ccd(0),
+    })
 }
 
 #[receive(
-    contract = "dex_contract",
-    name = "addLiquidity",
-    parameter = "AddLiquidityParams",
-    error = "CustomError",
+    contract = "staking",
+    name = "stake",
+    payable,
+    error = "StakingError",
     mutable
 )]
-fn add_liquidity(ctx: &ReceiveContext, host: &mut Host<State>) -> ReceiveResult<()> {
-    let params: AddLiquidityParams = ctx.parameter_cursor().get()?;
-    let sender = ctx.sender();
+fn stake(ctx: &ReceiveContext, host: &mut Host<State>, amount: Amount) -> Result<(), StakingError> {
+    let state = host.state_mut();
 
-    // Verify input amounts
+    ensure!(state.params.accepting_stakes, StakingError::StakingDisabled);
     ensure!(
-        params.amount0 > 0 && params.amount1 > 0,
-        CustomError::InsufficientAmount.into()
+        amount >= state.params.minimum_stake,
+        StakingError::InsufficientStakeAmount
+    );
+    ensure!(
+        amount <= state.params.maximum_stake,
+        StakingError::ExcessiveStakeAmount
     );
 
-    // Transfer tokens from sender to contract
-    transfer_token(
-        host,
-        &params.token_pair.token0_address,
-        &params.token_pair.token0_id,
-        &sender,
-        &Receiver::Contract(
-            ctx.self_address(),
-            OwnedEntrypointName::new_unchecked("receive".to_string()),
-        ),
-        TokenAmountU64::from(params.amount0),
-    )?;
-
-    transfer_token(
-        host,
-        &params.token_pair.token1_address,
-        &params.token_pair.token1_id,
-        &sender,
-        &Receiver::Contract(
-            ctx.self_address(),
-            OwnedEntrypointName::new_unchecked("receive".to_string()),
-        ),
-        TokenAmountU64::from(params.amount1),
-    )?;
-
-    let pool = host
-        .state_mut()
-        .pools
-        .entry(params.token_pair.clone())
-        .or_insert_with(|| LiquidityPool {
-            token0_reserve: 0,
-            token1_reserve: 0,
-            total_shares: 0,
-        });
-
-    // Calculate shares
-    let shares = if pool.total_shares == 0 {
-        // Initial liquidity
-        checked_arithmetic(|| {
-            let amount0_u64: u64 = params.amount0.into();
-            let amount1_u64: u64 = params.amount1.into();
-            let product: u64 = amount0_u64.checked_mul(amount1_u64)?;
-            sqrt_token_amount(product)
-        })?
-    } else {
-        // Subsequent liquidity
-        let shares0 = checked_arithmetic(|| {
-            let numerator = params.amount0.checked_mul(pool.total_shares)?;
-            let denominator: u64 = pool.token0_reserve;
-
-            // Ensure division by zero is handled safely
-            if denominator == 0 {
-                return None;
-            }
-
-            let result = numerator / denominator;
-            Some(result) // Convert back to `TokenAmountU64` for consistency
-        })?;
-
-        let shares1 = checked_arithmetic(|| {
-            let numerator = params.amount1.checked_mul(pool.total_shares)?;
-            let denominator: u64 = pool.token1_reserve;
-
-            // Ensure division by zero is handled safely
-            if denominator == 0 {
-                return None;
-            }
-
-            let result = numerator / denominator;
-            Some(result) // Convert back to `TokenAmountU64` for consistency
-        })?;
-        std::cmp::min(shares0, shares1)
-    };
-    ensure!(
-        shares >= params.min_liquidity,
-        CustomError::InsufficientLiquidity.into()
-    );
-
-    // Update pool reserves
-    pool.token0_reserve = checked_arithmetic(|| Some(pool.token0_reserve + params.amount0))?;
-    pool.token1_reserve = checked_arithmetic(|| Some(pool.token1_reserve + params.amount1))?;
-    pool.total_shares = checked_arithmetic(|| Some(pool.total_shares + shares))?;
-
-    // Update user shares
-    let sender_address = match sender {
-        Address::Account(addr) => addr,
-        _ => return Err(CustomError::ParseError.into()),
-    };
-    let user_shares = host
-        .state_mut()
-        .shares
-        .entry((params.token_pair, sender_address))
-        .or_insert(0u64); // Ensure this starts as `u64`
-
-    // Convert `u64` to `TokenAmountU64` for addition
-    let user_shares_token_amount = *user_shares;
-
-    // Perform the checked arithmetic operation
-    let shares_result = checked_arithmetic(|| Some(user_shares_token_amount + shares))?;
-
-    // Convert `TokenAmountU64` to `u64` if needed for storage or further calculations
-    let shares_u64: u64 = shares_result.into(); // Convert `TokenAmountU64` to `u64`
-
-    *user_shares = shares_u64;
-
-    Ok(())
-}
-
-#[receive(
-    contract = "dex_contract",
-    name = "removeLiquidity",
-    parameter = "RemoveLiquidityParams",
-    error = "Error",
-    mutable
-)]
-fn remove_liquidity(ctx: &ReceiveContext, host: &mut Host<State>) -> ReceiveResult<()> {
-    let params: RemoveLiquidityParams = ctx.parameter_cursor().get()?;
-    let sender = match ctx.sender() {
-        Address::Account(addr) => addr,
-        _ => return Err(CustomError::ParseError.into()),
+    let staker = ctx.sender();
+    let staker_account = match staker {
+        Address::Account(account_addr) => account_addr,
+        _ => return Err(StakingError::NoStakeFound),
     };
 
-    // Get pool and verify it exists
-    let (pool, user_shares) = {
-        let pools = host.state_mut();
-        let pool = pools
-            .pools
-            .get_mut(&params.token_pair)
-            .ok_or(CustomError::PoolNotFound)?;
+    let mut staker_info = if let Some(info) = state.stakers_history.get(&staker_account) {
+        ensure!(!info.slashed, StakingError::AlreadySlashed);
 
-        // Get user's shares
-        let user_shares = pools
-            .shares
-            .get_mut(&(params.token_pair.clone(), sender))
-            .ok_or(CustomError::InsufficientShares)?;
+        let pending =
+            calculate_pending_rewards(info, state.params.reward_rate, ctx.metadata().slot_time())?;
+        let mut updated_info = info.clone();
 
-        (pool, user_shares)
-    };
+        if state.params.auto_compound {
+            // Auto-compound by adding pending rewards to staked amount
+            updated_info.staked_amount = updated_info
+                .staked_amount
+                .checked_add(pending)
+                .ok_or(StakingError::ArithmeticError)?;
 
-    ensure!(
-        *user_shares >= params.shares,
-        CustomError::InsufficientShares.into()
-    );
-
-    // Calculate token amounts to return
-    let amount0 =
-        checked_arithmetic(|| Some((params.shares * pool.token0_reserve) / pool.total_shares))?;
-    let amount1 =
-        checked_arithmetic(|| Some((params.shares * pool.token1_reserve) / pool.total_shares))?;
-
-    // Verify minimum amounts
-    ensure!(
-        amount0 >= params.min_amount0.into(),
-        CustomError::InsufficientAmount.into()
-    );
-    ensure!(
-        amount1 >= params.min_amount1.into(),
-        CustomError::InsufficientAmount.into()
-    );
-
-    // Update pool state
-    pool.token0_reserve = checked_arithmetic(|| Some(pool.token0_reserve - amount0))?;
-    pool.token1_reserve = checked_arithmetic(|| Some(pool.token1_reserve - amount1))?;
-    pool.total_shares = checked_arithmetic(|| Some(pool.total_shares - params.shares))?;
-
-    // Update user shares
-    *user_shares = checked_arithmetic(|| Some(*user_shares - params.shares))?;
-    if *user_shares == 0 {
-        host.state_mut()
-            .shares
-            .remove(&(params.token_pair.clone(), sender));
-    }
-
-    // Transfer tokens back to user
-    transfer_token(
-        host,
-        &params.token_pair.token0_address,
-        &params.token_pair.token0_id,
-        &Address::Contract(ctx.self_address()),
-        &Receiver::from_account(sender),
-        TokenAmountU64(amount0),
-    )?;
-
-    transfer_token(
-        host,
-        &params.token_pair.token1_address,
-        &params.token_pair.token1_id,
-        &Address::Contract(ctx.self_address()),
-        &Receiver::from_account(sender),
-        TokenAmountU64(amount1),
-    )?;
-
-    Ok(())
-}
-
-/// Helper function to calculate swap amount using constant product formula
-fn calculate_amount_out(
-    amount_in: TokenAmount,
-    reserve_in: TokenAmount,
-    reserve_out: TokenAmount,
-) -> Result<TokenAmount, CustomError> {
-    // Check for zero values
-    ensure!(
-        amount_in > 0 && reserve_in > 0 && reserve_out > 0,
-        CustomError::InsufficientAmount
-    );
-
-    let amount_in_with_fee = checked_arithmetic(|| Some(amount_in * 997))?; // 0.3% fee
-    let numerator = checked_arithmetic(|| Some(amount_in_with_fee * reserve_out))?;
-    let denominator = checked_arithmetic(|| Some(reserve_in * 1000 + amount_in_with_fee))?;
-
-    checked_arithmetic(|| Some(numerator / denominator))
-}
-
-#[receive(
-    contract = "dex_contract",
-    name = "swap",
-    parameter = "SwapParams",
-    error = "Error",
-    mutable
-)]
-fn swap(ctx: &ReceiveContext, host: &mut Host<State>) -> ReceiveResult<()> {
-    let params: SwapParams = ctx.parameter_cursor().get()?;
-    let sender = match ctx.sender() {
-        Address::Account(addr) => addr,
-        _ => return Err(CustomError::ParseError.into()),
-    };
-
-    let (amount_out, is_token0) = {
-        let pool = host
-            .state_mut()
-            .pools
-            .get_mut(&params.token_pair)
-            .ok_or(CustomError::PoolNotFound)?;
-
-        // Calculate amount out
-        let (reserve_in, reserve_out) = if params.is_token0 {
-            (pool.token0_reserve, pool.token1_reserve)
+            // Emit compounding event
+            // host.emit(&StakingEvent::RewardsCompounded {
+            //     staker: staker_account,
+            //     amount: pending,
+            // });
         } else {
-            (pool.token1_reserve, pool.token0_reserve)
-        };
+            updated_info.pending_rewards = updated_info
+                .pending_rewards
+                .checked_add(pending)
+                .ok_or(StakingError::ArithmeticError)?;
+        }
+        updated_info
+    } else {
+        StakerInfo {
+            staked_amount: Amount::from_micro_ccd(0),
+            last_reward_timestamp: ctx.metadata().slot_time(),
+            pending_rewards: Amount::from_micro_ccd(0),
+            unbonding: Vec::new(),
+            slashed: false,
+        }
+    };
 
-        let calculated_amount_out =
-            calculate_amount_out(params.amount_in, reserve_in, reserve_out)?;
+    staker_info.staked_amount = staker_info
+        .staked_amount
+        .checked_add(amount)
+        .ok_or(StakingError::ArithmeticError)?;
+    staker_info.last_reward_timestamp = ctx.metadata().slot_time();
+
+    state.total_staked = state
+        .total_staked
+        .checked_add(amount)
+        .ok_or(StakingError::ArithmeticError)?;
+
+    state
+        .stakers_history
+        .insert(staker_account, staker_info.clone());
+    state
+        .active_stakers
+        .insert(staker_account, staker_info.clone());
+
+    // Emit staking event
+    // host.emit(&StakingEvent::Staked {
+    //     staker: staker_account,
+    //     amount,
+    // });
+
+    Ok(())
+}
+
+#[derive(Serialize, SchemaType)]
+pub struct UnstakeParam {
+    amount: Amount,
+}
+
+#[receive(
+    contract = "staking",
+    name = "initiate_unstake",
+    error = "StakingError",
+    parameter = "UnstakeParam",
+    mutable
+)]
+fn initiate_unstake(ctx: &ReceiveContext, host: &mut Host<State>) -> ReceiveResult<()> {
+    let state = host.state_mut();
+    let staker = ctx.sender();
+
+    let staker_account = match staker {
+        Address::Account(account_addr) => account_addr,
+        _ => return Err(StakingError::NoStakeFound.into()),
+    };
+
+    let params: UnstakeParam = ctx
+        .parameter_cursor()
+        .get()
+        .map_err(|_| StakingError::ParseParamsError)?;
+
+    // Get a reference to the staker info
+    let staker_info_ref = state
+        .stakers_history
+        .get(&staker_account)
+        .ok_or(StakingError::NoStakeFound)?;
+
+    // Create a mutable copy that we'll modify
+    let mut staker_info = staker_info_ref.clone();
+
+    ensure!(!staker_info.slashed, StakingError::AlreadySlashed.into());
+    ensure!(
+        staker_info.staked_amount >= params.amount,
+        StakingError::InsufficientBalance.into()
+    );
+
+    let pending = calculate_pending_rewards(
+        &staker_info,
+        state.params.reward_rate,
+        ctx.metadata().slot_time(),
+    )?;
+
+    if state.params.auto_compound {
+        staker_info.staked_amount = staker_info
+            .staked_amount
+            .checked_add(pending)
+            .ok_or(StakingError::ArithmeticError)?;
+    } else {
+        staker_info.pending_rewards = staker_info
+            .pending_rewards
+            .checked_add(pending)
+            .ok_or(StakingError::ArithmeticError)?;
+    }
+
+    staker_info.staked_amount = staker_info
+        .staked_amount
+        .checked_sub(params.amount)
+        .ok_or(StakingError::ArithmeticError)?;
+
+    let unlock_time = ctx
+        .metadata()
+        .slot_time()
+        .checked_add(Duration::from_seconds(state.params.unbonding_period))
+        .ok_or(StakingError::ArithmeticError)?;
+
+    // Push to unbonding vector
+    staker_info.unbonding.push(Unbounding {
+        amount: params.amount,
+        unlock_time,
+    });
+
+    // Update total staked amount
+    state.total_staked = state
+        .total_staked
+        .checked_sub(params.amount)
+        .ok_or(StakingError::ArithmeticError)?;
+
+    // Update the state with the modified staker info
+    state.stakers_history.insert(
+        staker_account,
+        StakerInfo {
+            last_reward_timestamp: staker_info.last_reward_timestamp,
+            pending_rewards: staker_info.pending_rewards,
+            staked_amount: staker_info.staked_amount,
+            unbonding: staker_info.unbonding,
+            slashed: staker_info.slashed,
+        },
+    );
+
+    Ok(())
+}
+
+#[receive(
+    contract = "staking",
+    name = "complete_unstake",
+    error = "StakingError",
+    mutable
+)]
+fn complete_unstake(ctx: &ReceiveContext, host: &mut Host<State>) -> Result<(), StakingError> {
+    let state = host.state_mut();
+    let staker = ctx.sender();
+    let staker_account = match staker {
+        Address::Account(account_addr) => account_addr,
+        _ => return Err(StakingError::NoStakeFound),
+    };
+
+    let staker_info = state
+        .stakers_history
+        .get_mut(&staker_account)
+        .ok_or(StakingError::NoStakeFound)?;
+
+    ensure!(!staker_info.slashed, StakingError::AlreadySlashed);
+
+    let current_time = ctx.metadata().slot_time();
+    let mut total_withdrawal = Amount::from_micro_ccd(0);
+
+    staker_info.unbonding.retain(
+        |Unbounding {
+             amount,
+             unlock_time,
+         }| {
+            if current_time >= *unlock_time {
+                total_withdrawal = total_withdrawal
+                    .checked_add(*amount)
+                    .expect("Withdrawal amount overflow");
+                false
+            } else {
+                true
+            }
+        },
+    );
+
+    ensure!(
+        total_withdrawal > Amount::from_micro_ccd(0),
+        StakingError::NoUnbondingFound
+    );
+
+    // Apply slashing if needed
+    if staker_info.slashed {
+        let slash_amount = total_withdrawal
+            .micro_ccd()
+            .checked_mul(state.params.slashing_rate as u64)
+            .and_then(|v| v.checked_div(10000))
+            .ok_or(StakingError::ArithmeticError)?;
+
+        total_withdrawal = Amount::from_micro_ccd(
+            total_withdrawal
+                .micro_ccd()
+                .checked_sub(slash_amount)
+                .ok_or(StakingError::ArithmeticError)?,
+        );
+    }
+
+    let is_empty =
+        staker_info.staked_amount == Amount::from_micro_ccd(0) && staker_info.unbonding.is_empty();
+
+    if is_empty {
+        state.active_stakers.remove(&staker_account);
+    }
+
+    host.invoke_transfer(&staker_account, total_withdrawal)
+        .map_err(|_| StakingError::TransferError)?;
+
+    Ok(())
+}
+#[receive(
+    contract = "staking",
+    name = "claim_rewards",
+    error = "StakingError",
+    mutable
+)]
+fn claim_rewards(ctx: &ReceiveContext, host: &mut Host<State>) -> Result<(), StakingError> {
+    let state = host.state_mut();
+    let staker = ctx.sender();
+
+    let staker_account = match staker {
+        Address::Account(account_addr) => account_addr,
+        _ => return Err(StakingError::NoStakeFound),
+    };
+
+    // Scope to limit the mutable borrow of `state`
+    let (pending_rewards, staker_empty) = {
+        let staker_info = state
+            .stakers_history
+            .get_mut(&staker_account)
+            .ok_or(StakingError::NoStakeFound)?;
+
+        ensure!(!staker_info.slashed, StakingError::AlreadySlashed);
+
+        let pending = calculate_pending_rewards(
+            &staker_info,
+            state.params.reward_rate,
+            ctx.metadata().slot_time(),
+        )?;
+
+        let total_rewards = staker_info
+            .pending_rewards
+            .checked_add(pending)
+            .ok_or(StakingError::ArithmeticError)?;
+
+        // Ensure rewards are greater than zero
         ensure!(
-            calculated_amount_out >= params.min_amount_out,
-            CustomError::InsufficientAmount.into()
+            total_rewards > Amount::zero(),
+            StakingError::InsufficientBalance
         );
 
-        // Update reserves within this scope
-        if params.is_token0 {
-            pool.token0_reserve =
-                checked_arithmetic(|| Some(pool.token0_reserve + params.amount_in))?;
-            pool.token1_reserve =
-                checked_arithmetic(|| Some(pool.token1_reserve - calculated_amount_out))?;
-        } else {
-            pool.token1_reserve =
-                checked_arithmetic(|| Some(pool.token1_reserve + params.amount_in))?;
-            pool.token0_reserve =
-                checked_arithmetic(|| Some(pool.token0_reserve - calculated_amount_out))?;
-        }
+        // Reset rewards and update the last reward timestamp
+        staker_info.pending_rewards = Amount::zero();
+        staker_info.last_reward_timestamp = ctx.metadata().slot_time();
 
-        // Return the amount out and whether token0 was used
-        (calculated_amount_out, params.is_token0)
+        // Check if staker should be removed after claiming rewards
+        let is_empty = staker_info.staked_amount == Amount::from_micro_ccd(0)
+            && staker_info.unbonding.is_empty();
+
+        (total_rewards, is_empty)
     };
 
-    // Transfer tokens outside the mutable borrow of `pool`
-    let (token_in_addr, token_in_id, token_out_addr, token_out_id) = if is_token0 {
-        (
-            &params.token_pair.token0_address,
-            &params.token_pair.token0_id,
-            &params.token_pair.token1_address,
-            &params.token_pair.token1_id,
-        )
-    } else {
-        (
-            &params.token_pair.token1_address,
-            &params.token_pair.token1_id,
-            &params.token_pair.token0_address,
-            &params.token_pair.token0_id,
-        )
-    };
+    if staker_empty {
+        state.active_stakers.remove(&staker_account);
+    }
 
-    transfer_token(
-        host,
-        token_in_addr,
-        token_in_id,
-        &Address::Account(sender),
-        &Receiver::Contract(
-            ctx.self_address(),
-            OwnedEntrypointName::new_unchecked("receive".to_string()),
-        ),
-        TokenAmountU64(params.amount_in),
-    )?;
+    state.total_rewards_paid += pending_rewards;
 
-    transfer_token(
-        host,
-        token_out_addr,
-        token_out_id,
-        &Address::Contract(ctx.self_address()),
-        &Receiver::from_account(sender),
-        TokenAmountU64(amount_out),
-    )?;
+    // Transfer rewards after mutable borrow of `state` is released
+    host.invoke_transfer(&staker_account, pending_rewards)
+        .map_err(|_| StakingError::TransferError)?;
+
+    Ok(())
+}
+
+#[receive(contract = "staking", name = "slash", error = "StakingError", mutable)]
+fn slash(ctx: &ReceiveContext, host: &mut Host<State>) -> Result<(), StakingError> {
+    let state = host.state_mut();
+
+    ensure!(
+        ctx.sender() == Address::Account(state.admin),
+        StakingError::NotAdmin
+    );
+
+    let params: AccountAddress = ctx
+        .parameter_cursor()
+        .get()
+        .map_err(|_| StakingError::ParseParamsError)?;
+
+    let staker_info = state
+        .stakers_history
+        .get_mut(&params)
+        .ok_or(StakingError::NoStakeFound)?;
+
+    ensure!(!staker_info.slashed, StakingError::AlreadySlashed);
+
+    // Calculate slash amount
+    let slash_amount = staker_info
+        .staked_amount
+        .micro_ccd()
+        .checked_mul(state.params.slashing_rate as u64)
+        .and_then(|v| v.checked_div(10000))
+        .ok_or(StakingError::ArithmeticError)?;
+
+    let slash_amount = Amount::from_micro_ccd(slash_amount);
+
+    // Update staker's slashed status
+    staker_info.slashed = true;
+    staker_info.staked_amount = staker_info
+        .staked_amount
+        .checked_sub(slash_amount)
+        .ok_or(StakingError::ArithmeticError)?;
+
+    // Emit slashing event
+    // host.emit(&StakingEvent::Slashed {
+    //     staker: params,
+    //     amount: slash_amount,
+    // });
 
     Ok(())
 }
 
 #[receive(
-    contract = "dex_contract",
-    name = "getPool",
-    parameter = "TokenPair",
-    return_value = "Option<LiquidityPool>"
+    contract = "staking",
+    name = "update_params",
+    parameter = "StakingParams",
+    error = "StakingError",
+    mutable
 )]
-fn get_pool(ctx: &ReceiveContext, host: &Host<State>) -> ReceiveResult<Option<LiquidityPool>> {
-    let token_pair: TokenPair = ctx.parameter_cursor().get()?;
-    Ok(host.state().pools.get(&token_pair).cloned())
+fn update_params(ctx: &ReceiveContext, host: &mut Host<State>) -> Result<(), StakingError> {
+    let state = host.state_mut();
+
+    let params = ctx
+        .parameter_cursor()
+        .get()
+        .map_err(|_| StakingError::ParseParamsError)?;
+
+    ensure!(
+        ctx.sender() == Address::Account(state.admin),
+        StakingError::NotAdmin
+    );
+
+    // Emit params updated event
+    // host.emit(&StakingEvent::ParamsUpdated {
+    //     new_params: params.clone(),
+    // });
+
+    state.params = params;
+
+    Ok(())
 }
 
 #[receive(
-    contract = "dex_contract",
-    name = "getShares",
-    parameter = "(TokenPair, AccountAddress)",
-    return_value = "TokenAmount"
+    contract = "staking",
+    name = "transfer_to_contact",
+    error = "StakingError",
+    payable,
+    mutable
 )]
-fn get_shares(ctx: &ReceiveContext, host: &Host<State>) -> ReceiveResult<TokenAmount> {
-    let params: (TokenPair, AccountAddress) = ctx.parameter_cursor().get()?;
-    Ok(host.state().shares.get(&params).copied().unwrap_or(0))
+fn trasfer_to_contract(
+    _ctx: &ReceiveContext,
+    _host: &mut Host<State>,
+    amount: Amount,
+) -> Result<(), StakingError> {
+    if amount.micro_ccd == 0 {
+        return Err(StakingError::InvalidAmount);
+    }
+
+    Ok(())
+}
+
+// ======== Helper Functions ========
+
+/// Calculates pending rewards with safety checks and overflow protection
+fn calculate_pending_rewards(
+    staker_info: &StakerInfo,
+    reward_rate: u64,
+    current_time: Timestamp,
+) -> Result<Amount, StakingError> {
+    if staker_info.staked_amount == Amount::zero() || staker_info.slashed {
+        return Ok(Amount::from_micro_ccd(0));
+    }
+
+    let duration_since_last_reward = current_time
+        .duration_since(staker_info.last_reward_timestamp)
+        .ok_or(StakingError::ArithmeticError)?;
+
+    let time_staked = duration_since_last_reward.seconds();
+
+    // Use u128 for intermediate calculations to prevent overflow
+    let staked_micro_ccd = staker_info.staked_amount.micro_ccd() as u128;
+
+    // Calculate reward: (staked_amount * reward_rate * time_staked) / (365 * 24 * 60 * 60 * 10000)
+    // The 10000 divisor is because reward_rate is in basis points (1% = 100)
+    let reward = staked_micro_ccd
+        .checked_mul(reward_rate as u128)
+        .and_then(|v| v.checked_mul(time_staked as u128))
+        .and_then(|v| v.checked_div(365 * 24 * 60 * 60 * 10000u128))
+        .ok_or(StakingError::ArithmeticError)?;
+
+    // Ensure reward doesn't exceed u64::MAX before converting
+    if reward > u64::MAX as u128 {
+        return Err(StakingError::ArithmeticError);
+    }
+
+    Ok(Amount::from_micro_ccd(reward as u64))
+}
+
+/// View function to get staker information, including current pending rewards.
+#[receive(
+    contract = "staking",
+    name = "view_staker_info",
+    parameter = "AccountAddress",
+    return_value = "Option<StakerInfo>",
+    mutable
+)]
+fn view_staker_info(
+    ctx: &ReceiveContext,
+    host: &mut Host<State>,
+) -> ReceiveResult<Option<StakerInfo>> {
+    let state = host.state();
+
+    let staker_account: AccountAddress = ctx.parameter_cursor().get()?;
+
+    // Retrieve staker information
+    if let Some(staker_info) = state.stakers_history.get(&staker_account) {
+        // Calculate pending rewards based on the last reward timestamp
+        let additional_pending_rewards = calculate_pending_rewards(
+            &staker_info,
+            state.params.reward_rate,
+            ctx.metadata().slot_time(),
+        )?;
+
+        // Update the `pending_rewards` field to reflect both stored and additional pending rewards
+        let total_pending_rewards = staker_info
+            .pending_rewards
+            .checked_add(additional_pending_rewards)
+            .ok_or(StakingError::ArithmeticError)?;
+
+        // Return updated staker info with total pending rewards
+        Ok(Some(StakerInfo {
+            staked_amount: staker_info.staked_amount,
+            last_reward_timestamp: staker_info.last_reward_timestamp,
+            pending_rewards: total_pending_rewards,
+            unbonding: staker_info.unbonding.clone(),
+            slashed: staker_info.slashed,
+        }))
+    } else {
+        // If the staker account is not found, return None
+        Ok(None)
+    }
+}
+
+/// View function to get current staking parameters
+#[receive(
+    contract = "staking",
+    name = "view_staking_params",
+    return_value = "StakingParams"
+)]
+fn view_staking_params(_ctx: &ReceiveContext, host: &Host<State>) -> ReceiveResult<StakingParams> {
+    Ok(host.state().params.clone())
+}
+
+#[derive(Serialize, SchemaType, Clone, Debug)]
+pub struct ViewState {
+    total_staked: Amount,
+    stakers_length: u64,
+    active_stakers: u64,
+    total_rewards_paid: Amount,
+}
+
+/// View function to get total staked amount
+#[receive(contract = "staking", name = "view_state", return_value = "ViewState")]
+fn view_state(_ctx: &ReceiveContext, host: &Host<State>) -> ReceiveResult<ViewState> {
+    let state = host.state();
+
+    Ok(ViewState {
+        total_staked: state.total_staked,
+        stakers_length: state.stakers_history.len() as u64,
+        active_stakers: state.active_stakers.len() as u64,
+        total_rewards_paid: state.total_rewards_paid,
+    })
 }
