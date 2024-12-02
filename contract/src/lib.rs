@@ -34,11 +34,14 @@ pub struct InitContractParams {
     /// The admin role of concordium liquid staking smart contract.
     pub admin: AccountAddress,
 
-    /// Address of liquid EUROe token contract.
-    pub liquid_euroe: ContractAddress,
-
     /// Address of the CIS-2 EUROe token contract.
     pub token_address: ContractAddress,
+
+    /// Unbonding period in seconds
+    pub unbonding_period: u64,
+
+    /// Slashing rate in basis points (1% = 100)
+    pub slashing_rate: u64,
 }
 
 /// Unstake parameters
@@ -71,28 +74,6 @@ pub struct SetPausedParams {
 pub struct UpdateAprParams {
     /// The new apr value.
     new_apr: u64,
-}
-
-/// The parameter for the contract function `mint`
-/// which mints an amount of liquid EUROe to a given address.
-#[derive(Serialize, SchemaType)]
-pub struct MintParams {
-    /// The address of owner.
-    pub owner: Address,
-
-    /// The amount to mint.
-    pub amount: TokenAmountU64,
-}
-
-/// The parameter for the contract function `burn`
-/// which burns an amount of liquid EUROe to a given address.
-#[derive(Serialize, SchemaType)]
-pub struct BurnParams {
-    /// The amount to burn liquid EUROe.
-    pub amount: TokenAmountU64,
-
-    /// The address of user.
-    pub burnaddress: Address,
 }
 
 /// Part of the parameter type for the contract function `permit`.
@@ -162,9 +143,6 @@ pub struct ViewResult {
     /// The Apr.
     apr: u64,
 
-    /// Address of liquid EUROe token contract
-    liquid_euroe: ContractAddress,
-
     /// Address of the EUROe token contract.
     token_address: ContractAddress,
 
@@ -180,6 +158,22 @@ pub struct StakeInfo {
 
     /// Timestamp when the stake was made.
     pub timestamp: u64,
+
+    /// Unbonding information
+    pub unbonding: Vec<UnbondingInfo>,
+
+    /// Whether the stake is slashed
+    pub slashed: bool,
+}
+
+/// Unbonding information
+#[derive(Debug, Serialize, SchemaType, Clone, PartialEq, Eq)]
+pub struct UnbondingInfo {
+    /// Amount to unbond
+    pub amount: TokenAmountU64,
+
+    /// Unlock time in seconds
+    pub unlock_time: u64,
 }
 
 /// State of the contract.
@@ -201,22 +195,23 @@ struct State<S = StateApi> {
     /// Mapping of staker addresses to their stake info.
     stakes: StateMap<AccountAddress, StakeInfo, S>,
 
-    /// Address of liquid EUROe token contract
-    liquid_euroe: ContractAddress,
-
     /// Address of the EUROe token contract.
     token_address: ContractAddress,
 
     /// The total number of participants
     total_participants: u64,
 
-    /// A registry to link an account to its next nonce. The nonce is used to
-    /// prevent replay attacks of the signed message. The nonce is increased
-    /// sequentially every time a signed message (corresponding to the
-    /// account) is successfully executed in the `permit` function. This
-    /// mapping keeps track of the next nonce that needs to be used by the
-    /// account to generate a signature.
+    /// A registry to link an account to its next nonce.
     nonces_registry: StateMap<AccountAddress, u64, S>,
+
+    /// Unbonding period in seconds
+    unbonding_period: u64,
+
+    /// Slashing rate in basis points (1% = 100)
+    slashing_rate: u64,
+
+    /// Track available rewards
+    rewards_pool: TokenAmountU64,
 }
 
 /// Implementation of state
@@ -326,6 +321,15 @@ pub enum Error {
 
     /// Invalid unstake amount
     InvalidUnstakeAmount,
+
+    /// Unbonding period not met
+    UnbondingPeriodNotMet,
+
+    /// Already slashed
+    AlreadySlashed,
+
+    /// Insufficient rewards pool
+    InsufficientRewardsPool,
 }
 
 /// Mapping the logging errors to Error.
@@ -477,20 +481,22 @@ fn contract_init(
     ctx: &InitContext,
     state_builder: &mut StateBuilder
 ) -> InitResult<State> {
-    let params: InitContractParams = ctx.parameter_cursor().get()?; // Get token address from parameters.
+    let params: InitContractParams = ctx.parameter_cursor().get()?;
     let state = State {
         paused: false,
         admin: params.admin,
-        total_staked: TokenAmountU64(0), // Initialize total staked to 0.
+        total_staked: TokenAmountU64(0),
         total_participants: 0,
-        apr: INITIAL_APR, // Set initial APR to 12%.
-        stakes: state_builder.new_map(), // Initialize empty stakes map.
-        liquid_euroe: params.liquid_euroe,
-        token_address: params.token_address, // Set the token address.
+        apr: INITIAL_APR,
+        stakes: state_builder.new_map(),
+        token_address: params.token_address,
         nonces_registry: state_builder.new_map(),
+        unbonding_period: params.unbonding_period,
+        slashing_rate: params.slashing_rate,
+        rewards_pool: TokenAmountU64(0),
     };
 
-    Ok(state) // Return success.
+    Ok(state)
 }
 
 /// Receive cis-2 token
@@ -519,7 +525,7 @@ fn contract_on_cis2_received<S: HasStateApi>(
 fn contract_permit(
     ctx: &ReceiveContext,
     host: &mut Host<State>,
-    logger: &mut Logger,
+    _logger: &mut Logger,
     crypto_primitives: &impl HasCryptoPrimitives
 ) -> ContractResult<()> {
     // Check if the contract is paused.
@@ -572,20 +578,20 @@ fn contract_permit(
         EntrypointName::new_unchecked("unstake")
     {
         let payload: UnstakeParams = from_bytes(&message.payload)?;
-        unstake_helper(ctx, host, logger, param.signer, payload.amount)?;
+        unstake_helper(ctx, host, _logger, param.signer, payload.amount)?;
     } else if
         // claim
         message.entry_point.as_entrypoint_name() ==
         EntrypointName::new_unchecked("claimRewards")
     {
-        claim_rewards_helper(ctx, host, logger, param.signer)?;
+        claim_rewards_helper(ctx, host, _logger, param.signer)?;
     } else {
         // no entrypoint
         bail!(Error::WrongEntryPoint);
     }
 
     // Log the nonce event.
-    logger.log(
+    _logger.log(
         &Event::Nonce(NonceEvent {
             account: param.signer,
             nonce,
@@ -607,22 +613,22 @@ fn contract_permit(
 fn contract_stake(
     ctx: &ReceiveContext,
     host: &mut Host<State>,
-    logger: &mut Logger
+    _logger: &mut Logger
 ) -> ContractResult<()> {
-    let state = host.state_mut(); // Get the contract state.
+    let state = host.state_mut();
     if !ctx.sender().matches_contract(&state.token_address) {
         bail!(Error::NotTokenContract);
-    } // Ensure the sender is the cis2 token contract.
+    }
 
     let params: OnReceivingCis2DataParams<
         ContractTokenId,
         TokenAmountU64,
         AdditionalData
-    > = ctx.parameter_cursor().get()?; // Get request parameters.
+    > = ctx.parameter_cursor().get()?;
 
-    let sender_address = only_account(&params.from)?; // Ensure that only accounts can stake.
-    let unix_timestamp = get_current_timestamp(ctx); // Get the current timestamp.
-    let amount = params.amount; // Get the amount to stake.
+    let sender_address = only_account(&params.from)?;
+    let unix_timestamp = get_current_timestamp(ctx);
+    let amount = params.amount;
 
     ensure!(!state.paused, Error::ContractPaused);
     ensure!(amount.gt(&TokenAmountU64(0)), Error::InvalidStakeAmount);
@@ -632,9 +638,11 @@ fn contract_stake(
         .or_insert_with(|| StakeInfo {
             amount: TokenAmountU64(0),
             timestamp: unix_timestamp,
-        }); // Update the sender's stake.
+            unbonding: Vec::new(),
+            slashed: false,
+        });
 
-    state.total_staked += amount; // Update the total staked amount.
+    state.total_staked += amount;
     if sender_stake.amount.eq(&TokenAmountU64(0)) {
         state.total_participants += 1;
     }
@@ -645,8 +653,6 @@ fn contract_stake(
 
     let apr = state.apr;
     drop(sender_stake);
-
-    mint(host, Address::Account(sender_address), amount)?; // Mint same amount of liquid EUROe tokens
 
     // If previously staked
     if user_stake_info.amount.gt(&TokenAmountU64(0)) {
@@ -659,7 +665,6 @@ fn contract_stake(
             ).into()
         );
 
-        // transfer EUROe tokens
         transfer_euroe_token(
             host,
             Address::Contract(ctx.self_address()),
@@ -669,15 +674,15 @@ fn contract_stake(
         )?;
     }
 
-    logger.log(
+    _logger.log(
         &Event::Staked(StakeEvent {
             user: sender_address,
             stake_amount: amount,
             staked_timestamp: unix_timestamp,
         })
-    )?; // Log stake event.
+    )?;
 
-    Ok(()) // Return success.
+    Ok(())
 }
 
 /// Function to unstake tokens.
@@ -692,11 +697,42 @@ fn contract_stake(
 fn contract_unstake(
     ctx: &ReceiveContext,
     host: &mut Host<State>,
-    logger: &mut Logger
+    _logger: &mut Logger
 ) -> ContractResult<()> {
     let param: UnstakeParams = ctx.parameter_cursor().get()?;
     let sender_address = only_account(&ctx.sender())?;
-    unstake_helper(ctx, host, logger, sender_address, param.amount)
+    
+    let state = host.state_mut();
+    ensure!(!state.paused, Error::ContractPaused);
+
+    let mut sender_stake = state.stakes
+        .entry(sender_address)
+        .occupied_or(Error::NoStakeFound)?;
+
+    ensure!(!sender_stake.slashed, Error::AlreadySlashed);
+    ensure!(sender_stake.amount >= param.amount, Error::InvalidUnstakeAmount);
+
+    let current_time = get_current_timestamp(ctx);
+    let unlock_time = current_time + state.unbonding_period;
+
+    // Add to unbonding list
+    sender_stake.unbonding.push(UnbondingInfo {
+        amount: param.amount,
+        unlock_time,
+    });
+
+    // Update stake amount
+    sender_stake.amount -= param.amount;
+    state.total_staked -= param.amount;
+
+    _logger.log(&Event::Unstaked(UnstakeEvent {
+        user: sender_address,
+        unstaked_amount: param.amount,
+        unix_timestamp: current_time,
+        rewards_earned: TokenAmountU64(0), // Rewards claimed separately
+    }))?;
+
+    Ok(())
 }
 
 /// Function to claim rewards.
@@ -710,10 +746,10 @@ fn contract_unstake(
 fn contract_claim_rewards(
     ctx: &ReceiveContext,
     host: &mut Host<State>,
-    logger: &mut Logger
+    _logger: &mut Logger
 ) -> ContractResult<()> {
     let sender_address = only_account(&ctx.sender())?;
-    claim_rewards_helper(ctx, host, logger, sender_address)
+    claim_rewards_helper(ctx, host, _logger, sender_address)
 }
 
 /// Function to withdraw EUROe stablecoin
@@ -779,7 +815,7 @@ fn contract_set_paused(
 fn update_apr(
     ctx: &ReceiveContext,
     host: &mut Host<State>,
-    logger: &mut Logger
+    _logger: &mut Logger
 ) -> ContractResult<()> {
     let params: UpdateAprParams = ctx.parameter_cursor().get()?; // Get request parameters.
     let sender = ctx.sender(); // Get the sender's address.
@@ -789,7 +825,7 @@ fn update_apr(
     let state = host.state_mut(); // Get the contract state.
 
     state.apr = params.new_apr; // Update the APR.
-    logger.log(
+    _logger.log(
         &Event::AprUpdated(UpdateAprEvent {
             new_apr: params.new_apr,
             update_timestamp,
@@ -982,7 +1018,6 @@ fn contract_view(
         admin: state.admin,
         total_staked: state.total_staked,
         apr: state.apr,
-        liquid_euroe: state.liquid_euroe,
         token_address: state.token_address,
         total_participants: state.total_participants,
     }) // Return success
@@ -1007,6 +1042,8 @@ fn contract_get_stake_info(
     Ok(StakeInfo {
         amount,
         timestamp,
+        unbonding: Vec::new(),
+        slashed: false,
     }) // Return success
 }
 
@@ -1042,42 +1079,46 @@ fn get_earned_rewards(
 fn unstake_helper(
     ctx: &ReceiveContext,
     host: &mut Host<State>,
-    logger: &mut Logger,
+    _logger: &mut Logger,
     sender_address: AccountAddress,
     amount: TokenAmountU64
 ) -> ContractResult<()> {
-    let unix_timestamp = get_current_timestamp(ctx); // Get the current timestamp.
+    let unix_timestamp = get_current_timestamp(ctx);
 
-    let state = host.state_mut(); // Get the contract state.
-    ensure!(!state.paused, Error::ContractPaused);
-
-    let mut sender_stake = state.stakes
-        .entry(sender_address)
-        .occupied_or(Error::NoStakeFound)?; // Ensure the sender has enough staked tokens.
-
-    let staked_amount = sender_stake.amount;
-    ensure!(staked_amount.0 >= amount.0, Error::InvalidUnstakeAmount); // ensure the unstake amount
-
-    let earned_rewards = TokenAmountU64(
-        calculate_reward(
-            amount.0,
-            sender_stake.timestamp,
-            unix_timestamp,
-            state.apr
-        ).into()
-    ); // Calculate rewards.
-
-    sender_stake.amount -= amount;
-    drop(sender_stake);
-
-    if amount.eq(&staked_amount) {
-        state.stakes.remove(&sender_address);
-        state.total_participants -= 1;
-    }
-
-    state.total_staked -= amount; // Update the total staked amount.
-
-    burn(host, Address::Account(sender_address), amount)?; // Burn liquid EUROe tokens.
+    let earned_rewards = {
+        let state = host.state_mut();  // Get mutable state
+        ensure!(!state.paused, Error::ContractPaused);
+    
+        let sender_stake = state.stakes.get(&sender_address).ok_or(Error::NoStakeFound)?;
+        let staked_amount = sender_stake.amount;
+        ensure!(staked_amount.0 >= amount.0, Error::InvalidUnstakeAmount);
+    
+        let earned_rewards = TokenAmountU64(
+            calculate_reward(
+                amount.0,
+                sender_stake.timestamp,
+                unix_timestamp,
+                state.apr
+            ).into()
+        );
+    
+        // Remove entry if fully unstaking
+        if amount.eq(&staked_amount) {
+            state.stakes.remove(&sender_address);
+            state.total_participants -= 1;
+        } else {
+            // Otherwise just update the amount
+            let _ = state.stakes.insert(sender_address, StakeInfo {
+                amount: staked_amount - amount,
+                timestamp: sender_stake.timestamp,
+                unbonding: sender_stake.unbonding.clone(),
+                slashed: sender_stake.slashed,
+            });
+        }
+    
+        state.total_staked -= amount;
+        earned_rewards
+    }; // state borrow ends here
 
     transfer_euroe_token(
         host,
@@ -1085,46 +1126,52 @@ fn unstake_helper(
         Receiver::Account(sender_address),
         amount + earned_rewards,
         true
-    )?; // Transfer EUROe tokens back to the sender along with rewards.
+    )?;
 
-    logger.log(
+    _logger.log(
         &Event::Unstaked(UnstakeEvent {
             user: sender_address,
             unstaked_amount: amount,
             unix_timestamp,
             rewards_earned: earned_rewards.into(),
         })
-    )?; // Log unstake event.
+    )?;
 
-    Ok(()) // Return success.
+    Ok(())
 }
 
 fn claim_rewards_helper(
     ctx: &ReceiveContext,
     host: &mut Host<State>,
-    logger: &mut Logger,
+    _logger: &mut Logger,
     sender_address: AccountAddress
 ) -> ContractResult<()> {
-    let unix_timestamp = get_current_timestamp(ctx); // Get the current timestamp.
+    let earned_rewards = {
+        let state = host.state_mut();
+        ensure!(!state.paused, Error::ContractPaused);
 
-    let state = host.state_mut();
-    ensure!(!state.paused, Error::ContractPaused);
+        let mut sender_stake = state.stakes
+            .entry(sender_address)
+            .occupied_or(Error::NoStakeFound)?;
 
-    let mut sender_stake = state.stakes
-        .entry(sender_address)
-        .occupied_or(Error::NoStakeFound)?;
+        ensure!(!sender_stake.slashed, Error::AlreadySlashed);
 
-    let earned_rewards = TokenAmountU64(
-        calculate_reward(
-            sender_stake.amount.0,
-            sender_stake.timestamp,
-            unix_timestamp,
-            state.apr
-        ).into()
-    ); // Calculate rewards.
+        let earned_rewards = TokenAmountU64(
+            calculate_reward(
+                sender_stake.amount.0,
+                sender_stake.timestamp,
+                get_current_timestamp(ctx),
+                state.apr
+            ).into()
+        );
 
-    sender_stake.timestamp = unix_timestamp;
-    drop(sender_stake);
+        ensure!(state.rewards_pool >= earned_rewards, Error::InsufficientRewardsPool);
+
+        sender_stake.timestamp = get_current_timestamp(ctx);
+        state.rewards_pool -= earned_rewards;
+        
+        earned_rewards
+    }; // state borrow ends here
 
     transfer_euroe_token(
         host,
@@ -1132,17 +1179,15 @@ fn claim_rewards_helper(
         Receiver::Account(sender_address),
         earned_rewards,
         true
-    )?; // Transfer EUROe rewards to the sender
+    )?;
 
-    logger.log(
-        &Event::Claimed(ClaimEvent {
-            user: sender_address,
-            rewards_claimed: earned_rewards,
-            claim_timestamp: unix_timestamp,
-        })
-    )?; // Log claim event.
+    _logger.log(&Event::Claimed(ClaimEvent {
+        user: sender_address,
+        rewards_claimed: earned_rewards,
+        claim_timestamp: get_current_timestamp(ctx),
+    }))?;
 
-    Ok(()) // Return success.
+    Ok(())
 }
 
 /// Validation function to check only account
@@ -1199,45 +1244,126 @@ fn transfer_euroe_token(
     Ok(())
 }
 
-/// Function to mint liquid EUROe.
-fn mint(
-    host: &mut Host<State>,
-    to: Address,
-    amount: TokenAmountU64
+/// New function to fund rewards pool
+#[receive(
+    contract = "concordium_staking",
+    name = "fundRewards",
+    parameter = "TokenAmountU64",
+    error = "Error",
+    mutable
+)]
+fn contract_fund_rewards(
+    ctx: &ReceiveContext,
+    host: &mut Host<State>
 ) -> ContractResult<()> {
-    let liquid_euroe = host.state().liquid_euroe;
-    let parameter = MintParams {
-        owner: to,
+    // Get admin address first
+    let admin = host.state().admin;
+    ensure!(ctx.sender().matches_account(&admin), Error::OnlyAdmin);
+    
+    let amount: TokenAmountU64 = ctx.parameter_cursor().get()?;
+    
+    // Transfer EUROe from admin to contract
+    transfer_euroe_token(
+        host,
+        Address::Account(admin),
+        Receiver::Contract(
+            ctx.self_address(),
+            OwnedEntrypointName::new_unchecked("onReceivingCIS2".to_string())
+        ),
         amount,
-    };
-
-    host.invoke_contract(
-        &liquid_euroe,
-        &parameter,
-        EntrypointName::new_unchecked("mint"),
-        Amount::zero()
+        true
     )?;
-
-    Ok(()) // Return success
+    
+    // Update rewards pool after transfer
+    host.state_mut().rewards_pool += amount;
+    
+    Ok(())
 }
 
-/// Function to burn liquid EUROe.
-fn burn(
+/// New function to complete unstaking after unbonding period
+#[receive(
+    contract = "concordium_staking",
+    name = "completeUnstake",
+    error = "Error",
+    mutable,
+    enable_logger
+)]
+fn contract_complete_unstake(
+    ctx: &ReceiveContext,
     host: &mut Host<State>,
-    burnaddress: Address,
-    amount: TokenAmountU64
+    _logger: &mut Logger
 ) -> ContractResult<()> {
-    let liquid_euroe = host.state().liquid_euroe;
-    let parameter = BurnParams {
-        amount,
-        burnaddress,
-    };
-    host.invoke_contract(
-        &liquid_euroe,
-        &parameter,
-        EntrypointName::new_unchecked("burn"),
-        Amount::zero()
+    let sender_address = only_account(&ctx.sender())?;
+    let current_time = get_current_timestamp(ctx);
+    
+    let state = host.state_mut();
+    let mut stake_info = state.stakes
+        .entry(sender_address)
+        .occupied_or(Error::NoStakeFound)?;
+
+    ensure!(!stake_info.slashed, Error::AlreadySlashed);
+
+    let mut total_amount = TokenAmountU64(0);
+    let mut remaining_unbonding = Vec::new();
+
+    // Process unbonding entries
+    for unbonding in stake_info.unbonding.iter() {
+        if current_time >= unbonding.unlock_time {
+            total_amount += unbonding.amount;
+        } else {
+            remaining_unbonding.push(unbonding.clone());
+        }
+    }
+
+    ensure!(total_amount.0 > 0, Error::UnbondingPeriodNotMet);
+
+    // Update unbonding list
+    stake_info.unbonding = remaining_unbonding;
+
+    // If slashed, apply slashing
+    if stake_info.slashed {
+        let slash_amount = (total_amount.0 * state.slashing_rate) / 10000;
+        total_amount = TokenAmountU64(total_amount.0 - slash_amount);
+    }
+
+    // Drop the state borrow before calling transfer_euroe_token
+    drop(stake_info);  // Drop any state borrows first
+
+    transfer_euroe_token(
+        host,
+        Address::Contract(ctx.self_address()),
+        Receiver::Account(sender_address),
+        total_amount,
+        true
     )?;
 
-    Ok(()) // Return success
+    Ok(())
+}
+
+/// New function to slash a staker
+#[receive(
+    contract = "concordium_staking",
+    name = "slash",
+    parameter = "AccountAddress",
+    error = "Error",
+    mutable
+)]
+fn contract_slash(
+    ctx: &ReceiveContext,
+    host: &mut Host<State>
+) -> ContractResult<()> {
+    let state = host.state_mut();
+    ensure!(ctx.sender().matches_account(&state.admin), Error::OnlyAdmin);
+    
+    let staker: AccountAddress = ctx.parameter_cursor().get()?;
+    let mut stake_info = state.stakes
+        .entry(staker)
+        .occupied_or(Error::NoStakeFound)?;
+
+    ensure!(!stake_info.slashed, Error::AlreadySlashed);
+
+    // Mark as slashed
+    stake_info.slashed = true;
+
+    Ok(())
 }
