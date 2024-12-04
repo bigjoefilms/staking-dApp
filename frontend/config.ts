@@ -17,7 +17,7 @@ const WALLET_CONNECT_OPTS = {
   projectId: CONCORDIUM_WALLET_CONNECT_PROJECT_ID,
   metadata: {
     name: "Staking Dapp",
-    description: "Stake your $CCD and get daily reward incentive",
+    description: "Stake your $EUROe and get daily reward incentive",
     url: "#",
     icons: ["https://walletconnect.com/walletconnect-logo.png"],
   },

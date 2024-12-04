@@ -133,7 +133,7 @@ const StakeInfoCard = () => {
               label="Staked Amount"
               value={`${
                 Number(stakerInfo?.staked_amount) / MICRO_CCD || 0
-              } CCD`}
+              } EUROe`}
               icon={
                 <svg
                   className="w-5 h-5 text-blue-600"
@@ -194,7 +194,7 @@ const StakeInfoCard = () => {
             <div className="flex items-center justify-between">
               <p className="text-2xl font-bold text-gray-800">{`${
                 Number(stakerInfo?.pending_rewards || 0) / MICRO_CCD
-              } CCD`}</p>
+              } EUROe`}</p>
               <button
                 onClick={() => {
                   if (Number(stakerInfo?.pending_rewards || 0) == 0) {
@@ -294,7 +294,7 @@ const StakeInfoCard = () => {
                         <p className="text-gray-700 mb-2">
                           Amount to unstake:{" "}
                           <span className="font-bold">
-                            {Number(item.amount) / MICRO_CCD} CCD
+                            {Number(item.amount) / MICRO_CCD} EUROe
                           </span>
                         </p>
                         <p className="text-gray-700">

@@ -131,7 +131,7 @@ const ProtocolStats = () => {
                 {Number(stakeState?.total_staked) / MICRO_CCD}
               </span>
               <span className="ml-2 text-lg font-semibold text-gray-600">
-                CCD
+                EUROe
               </span>
             </div>
           )}
@@ -193,7 +193,7 @@ const ProtocolStats = () => {
                 {Number(stakeState?.total_rewards_paid) / MICRO_CCD}
               </span>
               <span className="ml-2 text-lg font-semibold text-gray-600">
-                CCD
+                EUROe
               </span>
             </div>
           )}
