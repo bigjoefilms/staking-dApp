@@ -10,7 +10,7 @@ const StakingHeader = () => {
         <p className="text-xl text-gray-600">
           Stake your{" "}
           <span className="font-mono font-semibold text-blue-600">
-            $CCD
+            $EUROe
           </span>{" "}
           and get daily reward incentive
         </p>

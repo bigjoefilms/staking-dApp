@@ -17,7 +17,7 @@ const geistMono = localFont({
 
 export const metadata = {
   title: "Concordium Staking dApp",
-  description: "Stake your $CCD and get daily reward incentive",
+  description: "Stake your $EUROe and get daily reward incentive",
 };
 
 export default function RootLayout({

@@ -54,7 +54,7 @@ const StakeForm = () => {
         }
         // params
       );
-      toast.success(`Successfully Staked ${amount} CCD`);
+      toast.success(`Successfully Staked ${amount} EUROe`);
       setStakeAmount("");
       // transaction &&
       //   toast.success("Campaign successfully created", {
@@ -68,7 +68,7 @@ const StakeForm = () => {
 
       return transaction;
     } catch (error) {
-      toast.error("Error staking CCD");
+      toast.error("Error staking EUROe");
       console.error(error);
       setStakeLoading(false);
     }
@@ -157,24 +157,24 @@ const StakeForm = () => {
         </button>
       </div>
       <h2 className="text-2xl font-semibold text-gray-700 mb-4">
-        {activeOption === "stake" ? "Stake" : "Unstake"} CCD
+        {activeOption === "stake" ? "Stake" : "Unstake"} EUROe
       </h2>
 
       <form className="space-y-4">
         <div className="space-y-2">
-          <label
+          {/* <label
             htmlFor="amount"
             className="block text-gray-700 font-bold mb-2"
           >
-            Amount (CCD)
-          </label>
+            Amount
+          </label> */}
           <input
             id="amount"
             type="number"
             value={stakeAmount}
             onChange={(e) => setStakeAmount(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder={`Enter amount to ${
+            placeholder={`Enter amount of EUROe to ${
               activeOption === "stake" ? "stake" : "unstake"
             }`}
             required
@@ -194,7 +194,7 @@ const StakeForm = () => {
           className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded"
           onClick={() => {
             if (!account) {
-              toast.error(`Please connect a wallet to ${activeOption} CCD`);
+              toast.error(`Please connect a wallet to ${activeOption} EUROe`);
               return;
             }
             if (Number(stakeAmount) > 0) {
