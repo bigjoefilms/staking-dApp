@@ -1,6 +1,7 @@
 export const formatDate = (timestamp: any) => {
   if (!timestamp) return "-";
-  return new Date(timestamp).toLocaleDateString("en-US", {
+  const milliseconds = Number(timestamp) * 1000;
+  return new Date(milliseconds).toLocaleDateString("en-US", {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -9,7 +10,8 @@ export const formatDate = (timestamp: any) => {
 
 export const formatTime = (timestamp: any) => {
   if (!timestamp) return "-";
-  return new Date(timestamp).toLocaleTimeString("en-US", {
+  const milliseconds = Number(timestamp) * 1000;
+  return new Date(milliseconds).toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",

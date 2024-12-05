@@ -1,6 +1,7 @@
 import { MAX_CONTRACT_EXECUTION_ENERGY, MICRO_CCD } from "@/config";
 import { useWallet } from "@/provider/WalletProvider";
 import { moduleSchemaFromBase64 } from "@concordium/react-components";
+import * as EUROe from "@/utils/module_euroe_stablecoin";
 import {
   AccountTransactionType,
   CcdAmount,
@@ -9,6 +10,7 @@ import {
   Energy,
   EntrypointName,
   ReceiveName,
+  AccountAddress,
 } from "@concordium/web-sdk";
 import Image from "next/image";
 import React, { useState } from "react";
@@ -24,6 +26,7 @@ const StakeForm = () => {
   const [stakeLoading, setStakeLoading] = useState(false);
 
   const { connection, account, contract, rpc } = useWallet();
+
   const { getStakerInfo, viewState } = useStateProvider();
 
   const handleStakeOption = (option: string) => {
@@ -31,41 +34,47 @@ const StakeForm = () => {
     setStakeAmount("");
   };
 
-  const currentTime = getCurrentDateTime();
-  console.log(currentTime);
-
   const stake = async (amount: number) => {
-    // const loading = toast.loading("Creating campaign...");
     setStakeLoading(true);
     try {
+      // Construct transfer parameter
+      const transferParameter = [{
+        from: {
+          type: "Account",
+          content: AccountAddress.fromBase58(account),
+        },
+        to: {
+          type: "Contract",
+          content: [ContractAddress.create(10381), "stake"],
+        },
+        amount: BigInt(amount * MICRO_CCD),
+        data: "0000",
+        token_id: "",
+      }] as EUROe.TransferParameter;
+
       const transaction = await connection?.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
         {
-          amount: CcdAmount.fromCcd(amount),
-          address: ContractAddress.create(contract.index, 0),
+          address: ContractAddress.create(7260), 
           receiveName: ReceiveName.create(
-            contract.name,
-            EntrypointName.fromString("stake")
+            EUROe.contractName,
+            EntrypointName.fromString("transfer")
           ),
-          maxContractExecutionEnergy: Energy.create(
-            MAX_CONTRACT_EXECUTION_ENERGY
-          ),
-        }
-        // params
+          amount: CcdAmount.zero(),
+          maxContractExecutionEnergy: Energy.create(MAX_CONTRACT_EXECUTION_ENERGY),
+        },
+        EUROe.createTransferParameterWebWallet(transferParameter)
       );
+
       toast.success(`Successfully Staked ${amount} EUROe`);
       setStakeAmount("");
-      // transaction &&
-      //   toast.success("Campaign successfully created", {
-      //     id: loading,
-      //   });
+
       setTimeout(async () => {
         await getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
         await viewState(rpc as ConcordiumGRPCClient, contract);
       }, 10000);
       setStakeLoading(false);
-
       return transaction;
     } catch (error) {
       toast.error("Error staking EUROe");
@@ -75,59 +84,54 @@ const StakeForm = () => {
   };
 
   const initiateUnstake = async (amount: number) => {
-    // const loading = toast.loading("Creating campaign...");
     try {
       setStakeLoading(true);
-      const schema = await rpc?.getEmbeddedSchema(contract?.sourceModule);
+      if (!account || !connection || !rpc || !contract) {
+        throw new Error("Wallet not connected or contract not found");
+      }
 
-      // convert schema to base64……..
-      const schemaToBase64 = btoa(
-        new Uint8Array(schema as Uint8Array).reduce(
-          (data, byte) => data + String.fromCharCode(byte),
-          ""
-        )
-      );
+      const contract_schema = await rpc.getEmbeddedSchema(contract.sourceModule);
 
-      // create params……..
-      const params = {
-        parameters: {
-          amount: JSON.stringify(amount * MICRO_CCD),
-        },
-        schema: moduleSchemaFromBase64(schemaToBase64),
+      const parameter = {
+        amount: (amount * MICRO_CCD).toString()
       };
 
-      const transaction = await connection?.signAndSendTransaction(
+      const transaction = await connection.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
         {
-          amount: CcdAmount.fromCcd(0),
+          amount: CcdAmount.zero(),
           address: ContractAddress.create(contract.index, 0),
           receiveName: ReceiveName.create(
             contract.name,
-            EntrypointName.fromString("initiate_unstake")
+            EntrypointName.fromString("unstake")
           ),
-
-          maxContractExecutionEnergy: Energy.create(
-            MAX_CONTRACT_EXECUTION_ENERGY
-          ),
+          maxContractExecutionEnergy: Energy.create(MAX_CONTRACT_EXECUTION_ENERGY),
         },
-        params
+        {
+          parameters: parameter,
+          schema: moduleSchemaFromBase64(btoa(
+            new Uint8Array(contract_schema).reduce(
+              (data, byte) => data + String.fromCharCode(byte),
+              ""
+            )
+          ))
+        }
       );
+
       toast.success("Unstake successfully initiated");
       setStakeAmount("");
-      // transaction &&
-      //   toast.success("Campaign successfully created", {
-      //     id: loading,
-      //   });
+
       setTimeout(async () => {
         await getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
         await viewState(rpc as ConcordiumGRPCClient, contract);
       }, 10000);
+
       setStakeLoading(false);
       return transaction;
     } catch (error) {
+      console.error("Error initiating unstake:", error);
       toast.error("Error initiating unstake");
-      console.error(error);
       setStakeLoading(false);
     }
   };

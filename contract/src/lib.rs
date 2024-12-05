@@ -148,6 +148,9 @@ pub struct ViewResult {
 
     /// The total number of participants
     total_participants: u64,
+
+    /// Track total rewards paid to users
+    total_rewards_paid: TokenAmountU64,
 }
 
 /// Information about a stake.
@@ -212,6 +215,9 @@ struct State<S = StateApi> {
 
     /// Track available rewards
     rewards_pool: TokenAmountU64,
+
+    /// Track total rewards paid to users
+    total_rewards_paid: TokenAmountU64,
 }
 
 /// Implementation of state
@@ -494,6 +500,7 @@ fn contract_init(
         unbonding_period: params.unbonding_period,
         slashing_rate: params.slashing_rate,
         rewards_pool: TokenAmountU64(0),
+        total_rewards_paid: TokenAmountU64(0),
     };
 
     Ok(state)
@@ -1020,6 +1027,7 @@ fn contract_view(
         apr: state.apr,
         token_address: state.token_address,
         total_participants: state.total_participants,
+        total_rewards_paid: state.total_rewards_paid,
     }) // Return success
 }
 
@@ -1037,14 +1045,11 @@ fn contract_get_stake_info(
 ) -> ContractResult<StakeInfo> {
     let user: AccountAddress = ctx.parameter_cursor().get()?;
     let state = host.state();
-    let (amount, timestamp) = state.get_user_stake(&user);
-
-    Ok(StakeInfo {
-        amount,
-        timestamp,
-        unbonding: Vec::new(),
-        slashed: false,
-    }) // Return success
+    
+    // Get the full stake info from state
+    let stake_info = state.stakes.get(&user).ok_or(Error::NoStakeFound)?;
+    
+    Ok(stake_info.clone())
 }
 
 /// Function to get earned rewards.
@@ -1060,18 +1065,21 @@ fn get_earned_rewards(
     host: &Host<State>
 ) -> ContractResult<u64> {
     let user: AccountAddress = ctx.parameter_cursor().get()?;
-    let unix_timestamp = get_current_timestamp(ctx); // Get the current timestamp.
-    let state = host.state(); // Get the contract state.
+    let unix_timestamp = get_current_timestamp(ctx);
+    let state = host.state();
 
-    let (amount, timestamp) = state.get_user_stake(&user);
+    let stake_info = state.stakes.get(&user).ok_or(Error::NoStakeFound)?;
+    ensure!(!stake_info.slashed, Error::AlreadySlashed);
+
+    // Calculate rewards without checking pool balance
     let earned_rewards = calculate_reward(
-        amount.0,
-        timestamp,
+        stake_info.amount.0,
+        stake_info.timestamp,
         unix_timestamp,
         state.apr
-    ); // Calculate rewards.
+    );
 
-    Ok(earned_rewards) // Return the calculated rewards.
+    Ok(earned_rewards)
 }
 
 //  ## HELPER FUNCTIONS ##
@@ -1169,6 +1177,7 @@ fn claim_rewards_helper(
 
         sender_stake.timestamp = get_current_timestamp(ctx);
         state.rewards_pool -= earned_rewards;
+        state.total_rewards_paid += earned_rewards;
         
         earned_rewards
     }; // state borrow ends here
