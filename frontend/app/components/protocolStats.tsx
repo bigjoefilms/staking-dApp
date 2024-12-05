@@ -190,7 +190,7 @@ const ProtocolStats = () => {
           ) : (
             <div className="flex items-baseline">
               <span className="text-3xl font-bold text-gray-800">
-                {Number(stakeState?.total_rewards_paid) / MICRO_CCD}
+                {Number(stakeState.total_rewards_paid) / MICRO_CCD || "0"}
               </span>
               <span className="ml-2 text-lg font-semibold text-gray-600">
                 EUROe
@@ -199,7 +199,7 @@ const ProtocolStats = () => {
           )}
           <div className="mt-2 flex items-center text-sm text-gray-500">
             <span className="font-medium">
-              {Number(stakeState.stakers_length)}
+              {Number(stakeState.total_participants) || "0"}
             </span>
             <span className="ml-1">active stakers earning rewards</span>
           </div>

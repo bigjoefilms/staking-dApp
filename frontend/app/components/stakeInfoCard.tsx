@@ -1,6 +1,7 @@
 import { MAX_CONTRACT_EXECUTION_ENERGY, MICRO_CCD } from "@/config";
 import { useStateProvider } from "@/provider/StateProvider";
 import { useWallet } from "@/provider/WalletProvider";
+import { moduleSchemaFromBase64 } from "@concordium/react-components";
 import {
   compareTimestamps,
   formatDate,
@@ -27,42 +28,66 @@ const StakeInfoCard = () => {
   // State management
 
   const { connect, account, contract, rpc, connection } = useWallet();
-  const { stakerInfo, loadingUserStakeInfo, getStakerInfo, viewState } =
+  const { stakerInfo, loadingUserStakeInfo, getStakerInfo, viewState, earnedRewards } =
     useStateProvider();
   const [completeUnstakeLoading, setCompleteUnstakeLoading] = useState(false);
   const [claimRewardsLoading, setClaimRewardsLoading] = useState(false);
 
   const currentTime = getCurrentDateTime();
-
   const completeUnstake = async () => {
     try {
       setCompleteUnstakeLoading(true);
-      const transaction = await connection?.signAndSendTransaction(
+      if (!account || !connection || !rpc || !contract) {
+        throw new Error("Wallet not connected or contract not found");
+      }
+
+      const contract_schema = await rpc.getEmbeddedSchema(contract.sourceModule);
+
+      const transaction = await connection.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
         {
-          amount: CcdAmount.fromCcd(0),
+          amount: CcdAmount.zero(),
           address: ContractAddress.create(contract.index, 0),
           receiveName: ReceiveName.create(
             contract.name,
-            EntrypointName.fromString("complete_unstake")
+            EntrypointName.fromString("completeUnstake")
           ),
-          maxContractExecutionEnergy: Energy.create(
-            MAX_CONTRACT_EXECUTION_ENERGY
-          ),
+          maxContractExecutionEnergy: Energy.create(MAX_CONTRACT_EXECUTION_ENERGY),
+        },
+        {
+          schema: moduleSchemaFromBase64(btoa(
+            new Uint8Array(contract_schema).reduce(
+              (data, byte) => data + String.fromCharCode(byte),
+              ""
+            )
+          )),
+          parameters: {}
         }
       );
-      toast.success("Unstake successfully Completed");
+
+      toast.success("Unstake completed successfully");
+
+      // Refresh staker info and contract state after transaction
       setTimeout(async () => {
         await getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
         await viewState(rpc as ConcordiumGRPCClient, contract);
       }, 10000);
-      setCompleteUnstakeLoading(false);
 
+      setCompleteUnstakeLoading(false);
       return transaction;
-    } catch (error) {
-      toast.error("Error completing unstake");
-      console.error(error);
+    } catch (error: any) {
+      console.error("Error completing unstake:", error);
+      // Match contract's exact error conditions from lines 1315-1317
+      if (error.message?.includes("NoStakeFound")) {
+        toast.error("No stake found");
+      } else if (error.message?.includes("AlreadySlashed")) {
+        toast.error("Cannot complete unstake: stake has been slashed");
+      } else if (error.message?.includes("UnbondingPeriodNotMet")) {
+        toast.error("No tokens available to unstake yet");
+      } else {
+        toast.error("Error completing unstake");
+      }
       setCompleteUnstakeLoading(false);
     }
   };
@@ -70,30 +95,54 @@ const StakeInfoCard = () => {
   const claimRewards = async () => {
     try {
       setClaimRewardsLoading(true);
-      const transaction = await connection?.signAndSendTransaction(
+      if (!account || !connection || !rpc || !contract) {
+        throw new Error("Wallet not connected or contract not found");
+      }
+
+      const contract_schema = await rpc.getEmbeddedSchema(contract.sourceModule);
+
+      const transaction = await connection.signAndSendTransaction(
         account,
         AccountTransactionType.Update,
         {
-          amount: CcdAmount.fromCcd(0),
+          amount: CcdAmount.zero(),
           address: ContractAddress.create(contract.index, 0),
           receiveName: ReceiveName.create(
             contract.name,
-            EntrypointName.fromString("claim_rewards")
+            EntrypointName.fromString("claimRewards")
           ),
-          maxContractExecutionEnergy: Energy.create(
-            MAX_CONTRACT_EXECUTION_ENERGY
-          ),
+          maxContractExecutionEnergy: Energy.create(MAX_CONTRACT_EXECUTION_ENERGY),
+        },
+        {
+          schema: moduleSchemaFromBase64(btoa(
+            new Uint8Array(contract_schema).reduce(
+              (data, byte) => data + String.fromCharCode(byte),
+              ""
+            )
+          )),
+          parameters: {}
         }
       );
+
       toast.success("Reward claimed successfully");
+      
       setTimeout(async () => {
         await getStakerInfo(rpc as ConcordiumGRPCClient, account, contract);
         await viewState(rpc as ConcordiumGRPCClient, contract);
       }, 10000);
+
       setClaimRewardsLoading(false);
       return transaction;
-    } catch (error) {
-      toast.error("Error claiming rewards");
+    } catch (error: any) {
+      if (error.message?.includes("InsufficientRewardsPool")) {
+        toast.error("Insufficient rewards in pool");
+      } else if (error.message?.includes("NoStakeFound")) {
+        toast.error("No stake found");
+      } else if (error.message?.includes("AlreadySlashed")) {
+        toast.error("Cannot claim: stake has been slashed");
+      } else {
+        toast.error("Error claiming rewards");
+      }
       console.error(error);
       setClaimRewardsLoading(false);
     }
@@ -132,7 +181,7 @@ const StakeInfoCard = () => {
             <StakeMetric
               label="Staked Amount"
               value={`${
-                Number(stakerInfo?.staked_amount) / MICRO_CCD || 0
+                Number(stakerInfo?.amount)/ MICRO_CCD || 0
               } EUROe`}
               icon={
                 <svg
@@ -153,8 +202,8 @@ const StakeInfoCard = () => {
             <StakeMetric
               label="Start Date"
               value={`${formatDate(
-                stakerInfo?.last_reward_timestamp
-              )}, ${formatTime(stakerInfo?.last_reward_timestamp)}`}
+                stakerInfo?.timestamp
+              )}, ${formatTime(stakerInfo?.timestamp)}`}
               icon={
                 <svg
                   className="w-5 h-5 text-blue-600"
@@ -192,12 +241,13 @@ const StakeInfoCard = () => {
               <p className="text-gray-600 font-medium">Accumulated Reward</p>
             </div>
             <div className="flex items-center justify-between">
-              <p className="text-2xl font-bold text-gray-800">{`${
+              <p className="text-2xl font-bold text-gray-800">{`${earnedRewards} EUROe`}</p>
+                            {/* <p className="text-2xl font-bold text-gray-800">{`${
                 Number(stakerInfo?.pending_rewards || 0) / MICRO_CCD
-              } EUROe`}</p>
+              } EUROe`}</p> */}
               <button
                 onClick={() => {
-                  if (Number(stakerInfo?.pending_rewards || 0) == 0) {
+                  if (Number(earnedRewards) == 0) {
                     toast.error("Rewards must be greater than zero");
                   } else {
                     claimRewards();
